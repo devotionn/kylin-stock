@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { listLedger, type LedgerRow } from '../services/inventory'
@@ -8,11 +8,13 @@ import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
 const exporting = ref(false)
+const operationBusy = computed(() => loading.value || exporting.value)
 const rows = ref<LedgerRow[]>([])
 const dateRange = ref<string[]>([])
 const filters = reactive({ material: '', type: '', relatedUnit: '', destination: '' })
 
 async function refresh() {
+  if (operationBusy.value) return
   loading.value = true
   try {
     rows.value = await listLedger({
@@ -28,17 +30,22 @@ async function refresh() {
 }
 
 function reset() {
+  if (operationBusy.value) return
   Object.assign(filters, { material: '', type: '', relatedUnit: '', destination: '' })
   dateRange.value = []
   refresh()
 }
 
 async function exportCurrent() {
+  // Never export the previous rows while a new query is still resolving.
+  if (operationBusy.value) return
   if (!rows.value.length) return ElMessage.warning('当前没有可导出的查询结果')
+
+  const exportRows = rows.value.slice()
   exporting.value = true
   try {
-    const path = await exportLedgerRows(rows.value)
-    if (path) ElMessage.success('当前查询结果已导出')
+    const path = await exportLedgerRows(exportRows)
+    if (path) ElMessage.success(`当前查询结果已导出（${exportRows.length} 条）`)
   } catch (e) {
     ElMessage.error(`导出失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
@@ -52,9 +59,10 @@ onMounted(refresh)
 <template>
   <el-card shadow="never">
     <div class="toolbar">
-      <el-input v-model="filters.material" clearable placeholder="物资名称" style="width:180px" />
+      <el-input v-model="filters.material" :disabled="operationBusy" clearable placeholder="物资名称" style="width:180px" />
       <el-date-picker
         v-model="dateRange"
+        :disabled="operationBusy"
         type="daterange"
         value-format="YYYY-MM-DD"
         start-placeholder="开始日期"
@@ -62,22 +70,22 @@ onMounted(refresh)
         range-separator="至"
         style="width:260px"
       />
-      <el-input v-model="filters.relatedUnit" clearable placeholder="单位" style="width:170px" />
-      <el-select v-model="filters.type" clearable placeholder="业务类型" style="width:130px">
+      <el-input v-model="filters.relatedUnit" :disabled="operationBusy" clearable placeholder="单位" style="width:170px" />
+      <el-select v-model="filters.type" :disabled="operationBusy" clearable placeholder="业务类型" style="width:130px">
         <el-option label="入库" value="IN" />
         <el-option label="出库" value="OUT" />
         <el-option label="调整" value="ADJUST" />
       </el-select>
-      <el-input v-model="filters.destination" clearable placeholder="出库去向" style="width:180px" />
-      <el-button type="primary" @click="refresh">查询</el-button>
-      <el-button @click="reset">重置</el-button>
-      <el-button type="success" :loading="exporting" :disabled="!rows.length" @click="exportCurrent">
+      <el-input v-model="filters.destination" :disabled="operationBusy" clearable placeholder="出库去向" style="width:180px" />
+      <el-button type="primary" :loading="loading" :disabled="operationBusy" @click="refresh">查询</el-button>
+      <el-button :disabled="operationBusy" @click="reset">重置</el-button>
+      <el-button type="success" :loading="exporting" :disabled="operationBusy || !rows.length" @click="exportCurrent">
         导出当前结果（{{ rows.length }}）
       </el-button>
     </div>
 
     <el-alert
-      title="导出遵循“查询什么，就导出什么”：导出内容与当前表格结果一致。"
+      title="导出遵循“查询什么，就导出什么”：查询执行期间会暂时锁定筛选和导出，保证文件与当前表格结果一致。"
       type="info"
       :closable="false"
       show-icon
