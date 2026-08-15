@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import { getDatabase } from './database'
 
 export interface InventoryRow {
@@ -53,25 +54,6 @@ export interface StockOperationInput {
   remark?: string
 }
 
-const transactionNo = (type: 'IN' | 'OUT') => {
-  const d = new Date()
-  const stamp = d.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)
-  return `${type}-${stamp}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
-}
-
-async function withTransaction<T>(task: () => Promise<T>): Promise<T> {
-  const db = await getDatabase()
-  await db.execute('BEGIN IMMEDIATE')
-  try {
-    const result = await task()
-    await db.execute('COMMIT')
-    return result
-  } catch (error) {
-    try { await db.execute('ROLLBACK') } catch { /* no-op */ }
-    throw error
-  }
-}
-
 function validate(input: StockOperationInput) {
   if (!input.materialId) throw new Error('请选择物资')
   if (!input.locationId) throw new Error('请选择存放位置')
@@ -81,50 +63,13 @@ function validate(input: StockOperationInput) {
 
 export async function stockIn(input: StockOperationInput) {
   validate(input)
-  return withTransaction(async () => {
-    const db = await getDatabase()
-    const now = new Date().toISOString()
-    await db.execute(`INSERT INTO stock_transactions
-      (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
-      VALUES ($1,'IN',$2,$3,$4,$5,$6,NULL,$7,$8,$9,$10)`, [
-      transactionNo('IN'), input.materialId, input.locationId, input.quantity, input.occurredAt,
-      input.relatedUnit?.trim() || null, input.handler?.trim() || null, input.receiver?.trim() || null,
-      input.remark?.trim() || null, now,
-    ])
-    await db.execute(`INSERT INTO inventory_balances(material_id,location_id,quantity,updated_at)
-      VALUES ($1,$2,$3,$4)
-      ON CONFLICT(material_id,location_id) DO UPDATE SET
-      quantity = quantity + excluded.quantity, updated_at = excluded.updated_at`, [
-      input.materialId, input.locationId, input.quantity, now,
-    ])
-  })
+  return invoke<string>('stock_in', { input })
 }
 
 export async function stockOut(input: StockOperationInput) {
   validate(input)
-  const destination = input.destination?.trim()
-  if (!destination) throw new Error('出库去向不能为空')
-  return withTransaction(async () => {
-    const db = await getDatabase()
-    const rows = await db.select<{ quantity: number }[]>(
-      'SELECT quantity FROM inventory_balances WHERE material_id=$1 AND location_id=$2',
-      [input.materialId, input.locationId],
-    )
-    const available = Number(rows[0]?.quantity ?? 0)
-    if (available < input.quantity) throw new Error(`库存不足，当前可用库存为 ${available}`)
-
-    const now = new Date().toISOString()
-    await db.execute(`INSERT INTO stock_transactions
-      (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
-      VALUES ($1,'OUT',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [
-      transactionNo('OUT'), input.materialId, input.locationId, input.quantity, input.occurredAt,
-      input.relatedUnit?.trim() || null, destination, input.handler?.trim() || null,
-      input.receiver?.trim() || null, input.remark?.trim() || null, now,
-    ])
-    await db.execute(`UPDATE inventory_balances
-      SET quantity = quantity - $1, updated_at=$2
-      WHERE material_id=$3 AND location_id=$4`, [input.quantity, now, input.materialId, input.locationId])
-  })
+  if (!input.destination?.trim()) throw new Error('出库去向不能为空')
+  return invoke<string>('stock_out', { input })
 }
 
 export async function listInventory(filters: InventoryFilters | string = {}): Promise<InventoryRow[]> {

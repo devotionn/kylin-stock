@@ -9,7 +9,7 @@ Status: **completed / continuously maintained**.
 
 ## Phase 1 - Foundation
 
-Status: **implemented, build validation pending**.
+Status: **implemented; CI compile validation passed**.
 
 Completed:
 
@@ -21,14 +21,15 @@ Completed:
 - Tauri SQL/dialog/filesystem capability configuration.
 - Customer-required centered table styling baseline.
 - Main navigation entries for all V1 modules.
+- GitHub Actions build gate.
+- `npm run build` passes in Linux CI.
+- Rust `cargo check` passes in Linux CI.
 
-Remaining validation:
+Remaining target-runtime validation:
 
-- Install dependencies and generate lockfiles in a build environment.
-- Validate `npm run build`.
-- Validate `tauri dev` desktop startup.
-- Validate SQLite initialization/read/write on Linux.
-- Add structured logging/error boundary.
+- Validate `tauri dev` / packaged desktop startup on Linux.
+- Validate SQLite initialization/read/write on the real Kylin machine.
+- Add structured logging/error boundary if needed during target-machine testing.
 
 ## Phase 2 - Master Data
 
@@ -45,20 +46,23 @@ Completed:
 
 ## Phase 3 - Inventory Core
 
-Status: **implemented and merged to main**.
+Status: **implemented and merged; transaction implementation hardened during Phase 6**.
 
 Completed:
 
-- Stock-in form and transaction.
+- Stock-in form.
 - Stock-out form and mandatory destination.
 - Insufficient-stock guard / no normal negative inventory.
 - Per-material/per-location inventory balances.
 - Current inventory view.
 - Inventory distribution view.
 - Transaction ledger.
-- Atomic SQLite transaction semantics for ledger + balance changes.
 
-Core flow now exists:
+Hardening:
+
+The initial frontend implementation issued `BEGIN/COMMIT` through multiple Tauri SQL plugin calls. Because the plugin executes against a SQLx connection pool, Phase 6 moves stock mutations into native Rust commands. Each stock-in/out operation now opens one dedicated SQLite connection and executes `BEGIN IMMEDIATE -> ledger mutation -> balance mutation -> COMMIT` on that same connection. Failures roll back before returning to the UI.
+
+Core flow:
 
 `material -> stock in -> inventory -> stock out -> destination -> ledger`
 
@@ -84,16 +88,14 @@ Completed:
 
 Validation remaining:
 
-- TypeScript/Vite build.
-- Tauri filesystem permission check.
 - `.xlsx` opening and Chinese-content validation in target office software.
 - Real Kylin V10 / ARM64 save-dialog and file-write test.
 
 ## Phase 5 - Backup & Restore
 
-Status: **implemented on `feat/backup-restore`, validation pending**.
+Status: **implemented, CI-green and merged to main**.
 
-Implemented:
+Completed:
 
 - Manual backup with native save dialog.
 - Annual-labelled full database snapshot.
@@ -109,35 +111,44 @@ Implemented:
 - Post-restore `PRAGMA integrity_check`.
 - Automatic attempt to recover the pre-restore safety copy if integrity check fails.
 - Database connection reopened after backup/restore lifecycle.
+- Linux CI passed TypeScript/Vite build and Rust `cargo check` before merge.
 
 Implementation note:
 
 `sqlite:kylin-stock.db` is resolved by the current Tauri SQL plugin under the Tauri `app_config_dir`; the native backup module deliberately resolves the same directory before accessing `kylin-stock.db`.
 
-Validation remaining:
+Target-machine validation remaining:
 
-- TypeScript build.
-- Rust `cargo check` / Tauri build.
 - Manual backup-create test.
 - Annual-backup test.
 - Modify-data -> restore -> data-recovered test.
 - Corrupt/non-SQLite file rejection test.
 - USB/removable-media backup target test on Kylin.
 
-Exit criteria: a test database can be backed up, modified and restored correctly without losing the pre-restore safety copy.
+## Phase 6 - UX & Data-Safety Hardening
 
-## Phase 6 - UX Hardening
+Status: **in progress on `feat/ux-hardening`**.
 
-Status: **next after build validation**.
+Implemented / in branch:
 
-- Dashboard with real database statistics.
-- Empty/loading/error states.
-- Stronger form validation.
-- Long-text handling.
-- Chinese UI consistency.
-- Confirmation dialogs for destructive actions.
+- Dashboard backed by real SQLite statistics.
+- Real recent-transaction table on dashboard.
+- Real stock-overview table on dashboard.
+- Local-day “today stock-in / stock-out” statistics.
+- Human-readable local date/time formatting in ledger, inventory, backup history and XLSX exports.
+- Stock operation form defaults to local desktop time instead of UTC text slicing.
+- Stronger stock form validation and no-master-data warning.
+- Lazy-loaded business routes to reduce initial application payload.
+- Native Rust single-connection inventory transactions to guarantee ledger/balance atomicity.
+- Native stock-out performs both pre-check and guarded balance update to prevent negative inventory.
+
+Still planned:
+
+- CI validation of the Phase 6 changes.
+- Review empty/loading/error states across all pages.
+- Long-text handling review.
+- Chinese UI consistency review.
 - Table alignment requirement verification.
-- Human-readable local date/time formatting.
 
 ## Phase 7 - Kylin ARM64 Compatibility
 

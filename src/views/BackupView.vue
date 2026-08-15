@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { chooseRestoreFile, createBackup, listBackupRecords, restoreBackup, type BackupRecord } from '../services/backup'
+import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
 const backingUp = ref(false)
@@ -128,7 +129,7 @@ onMounted(refresh)
         </el-table-column>
         <el-table-column prop="backup_year" label="年度" width="100" />
         <el-table-column label="文件大小" width="120"><template #default="{ row }">{{ formatSize(row.file_size) }}</template></el-table-column>
-        <el-table-column prop="created_at" label="创建时间" min-width="190" />
+        <el-table-column label="创建时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.created_at) }}</template></el-table-column>
         <el-table-column prop="remark" label="说明" min-width="220" show-overflow-tooltip />
         <el-table-column prop="file_path" label="保存位置" min-width="300" show-overflow-tooltip />
       </el-table>

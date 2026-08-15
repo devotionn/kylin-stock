@@ -3,6 +3,7 @@ import { writeFile } from '@tauri-apps/plugin-fs'
 import * as XLSX from 'xlsx'
 import type { InventoryRow, LedgerRow } from './inventory'
 import type { Material } from './masterData'
+import { formatDateTime } from '../utils/date'
 
 function safeDateStamp() {
   const d = new Date()
@@ -68,12 +69,12 @@ export async function exportLedgerRows(rows: LedgerRow[]) {
       row.destination ?? '',
       row.handler ?? '',
       row.receiver ?? '',
-      row.occurred_at,
+      formatDateTime(row.occurred_at),
       row.remark ?? '',
     ]),
   ]
   const sheet = XLSX.utils.aoa_to_sheet(data)
-  setColumnWidths(sheet, [24, 10, 20, 12, 10, 18, 18, 20, 12, 12, 22, 24])
+  setColumnWidths(sheet, [24, 10, 20, 12, 10, 18, 18, 20, 12, 12, 20, 24])
   const book = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(book, sheet, '出入库明细')
   return saveWorkbook(book, `出入库明细_${safeDateStamp()}.xlsx`)
@@ -87,11 +88,11 @@ export async function exportInventoryRows(rows: InventoryRow[]) {
       row.unit_name ?? '',
       row.location_name,
       row.quantity,
-      row.updated_at,
+      formatDateTime(row.updated_at),
     ]),
   ]
   const sheet = XLSX.utils.aoa_to_sheet(data)
-  setColumnWidths(sheet, [22, 10, 20, 14, 22])
+  setColumnWidths(sheet, [22, 10, 20, 14, 20])
   const book = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(book, sheet, '库存物资分布')
   return saveWorkbook(book, `库存物资分布_${safeDateStamp()}.xlsx`)
