@@ -1,5 +1,6 @@
 mod backup;
 mod inventory;
+mod migration;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,7 +12,8 @@ pub fn run() {
             backup::create_database_backup,
             backup::restore_database_backup,
             inventory::stock_in,
-            inventory::stock_out
+            inventory::stock_out,
+            migration::initialize_database_schema
         ])
         .run(tauri::generate_context!())
         .expect("error while running KylinStock");
