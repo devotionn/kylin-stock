@@ -1,4 +1,4 @@
-name: Inventory Regression Tests
+name: Core Database Regression Tests
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  inventory-regression:
+  core-database-regression:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
 
@@ -35,5 +35,5 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Run inventory transaction regression tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml inventory::tests -- --nocapture
+      - name: Run core database regression tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
