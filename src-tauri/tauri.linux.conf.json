@@ -1,0 +1,10 @@
+{
+  "productName": "kylin-stock",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "desktopTemplate": "deb.desktop.hbs"
+      }
+    }
+  }
+}
