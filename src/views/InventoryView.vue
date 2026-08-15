@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listInventory, type InventoryRow } from '../services/inventory'
 import { exportInventoryRows } from '../services/export'
+import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
 const exporting = ref(false)
@@ -59,7 +60,7 @@ onMounted(refresh)
       <el-table-column prop="unit_name" label="单位" width="100" />
       <el-table-column prop="location_name" label="存放位置" min-width="160" />
       <el-table-column prop="quantity" label="当前库存" width="140" />
-      <el-table-column prop="updated_at" label="最后更新时间" min-width="200" />
+      <el-table-column label="最后更新时间" min-width="180"><template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template></el-table-column>
     </el-table>
   </el-card>
 </template>
