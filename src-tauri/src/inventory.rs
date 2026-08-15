@@ -103,12 +103,11 @@ pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<Stri
     begin_immediate(&mut connection).await?;
 
     let transaction_no = transaction_no("IN");
-    let created_at = chrono_like_now();
-    let result = async {
+    let result: Result<(), String> = async {
         sqlx::query(
             r#"INSERT INTO stock_transactions
               (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
-              VALUES (?,'IN',?,?,?,?,?,NULL,?,?,?,?)"#,
+              VALUES (?,'IN',?,?,?,?,?,NULL,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))"#,
         )
         .bind(&transaction_no)
         .bind(input.material_id)
@@ -119,13 +118,13 @@ pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<Stri
         .bind(clean(&input.handler))
         .bind(clean(&input.receiver))
         .bind(clean(&input.remark))
-        .bind(&created_at)
         .execute(&mut connection)
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
         sqlx::query(
             r#"INSERT INTO inventory_balances(material_id,location_id,quantity,updated_at)
-               VALUES (?,?,?,?)
+               VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                ON CONFLICT(material_id,location_id) DO UPDATE SET
                quantity = quantity + excluded.quantity,
                updated_at = excluded.updated_at"#,
@@ -133,11 +132,11 @@ pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<Stri
         .bind(input.material_id)
         .bind(input.location_id)
         .bind(input.quantity)
-        .bind(&created_at)
         .execute(&mut connection)
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
-        Ok::<(), sqlx::Error>(())
+        Ok(())
     }
     .await;
 
@@ -182,12 +181,11 @@ pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<Str
     }
 
     let transaction_no = transaction_no("OUT");
-    let created_at = chrono_like_now();
-    let result = async {
+    let result: Result<(), String> = async {
         sqlx::query(
             r#"INSERT INTO stock_transactions
               (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
-              VALUES (?,'OUT',?,?,?,?,?,?,?,?,?,?)"#,
+              VALUES (?,'OUT',?,?,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))"#,
         )
         .bind(&transaction_no)
         .bind(input.material_id)
@@ -199,30 +197,28 @@ pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<Str
         .bind(clean(&input.handler))
         .bind(clean(&input.receiver))
         .bind(clean(&input.remark))
-        .bind(&created_at)
         .execute(&mut connection)
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
         let update = sqlx::query(
             r#"UPDATE inventory_balances
-               SET quantity = quantity - ?, updated_at=?
+               SET quantity = quantity - ?, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
                WHERE material_id=? AND location_id=? AND quantity >= ?"#,
         )
         .bind(input.quantity)
-        .bind(&created_at)
         .bind(input.material_id)
         .bind(input.location_id)
         .bind(input.quantity)
         .execute(&mut connection)
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
 
         if update.rows_affected() != 1 {
-            return Err(sqlx::Error::Protocol(
-                "库存余额发生变化，本次出库已取消，请重试".to_string(),
-            ));
+            return Err("库存余额发生变化，本次出库已取消，请重试".into());
         }
 
-        Ok::<(), sqlx::Error>(())
+        Ok(())
     }
     .await;
 
@@ -236,16 +232,4 @@ pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<Str
     }
 
     Ok(transaction_no)
-}
-
-fn chrono_like_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Business timestamps supplied by the UI use RFC3339/ISO strings. `created_at`
-    // only needs a stable sortable UTC representation; SQLite's UTC datetime is
-    // generated without relying on an additional date-time crate.
-    let _ = SystemTime::now().duration_since(UNIX_EPOCH);
-    // SQLite evaluates this on the same connection in subsequent statements only
-    // when embedded in SQL. Keep application-generated metadata interoperable by
-    // using a UTC epoch-millisecond string prefixed for lexical stability.
-    format!("epoch-ms:{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis())
 }
