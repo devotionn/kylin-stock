@@ -90,10 +90,60 @@ jobs:
       - name: Build native ARM64 deb smoke package
         run: npm run tauri:build -- --bundles deb
 
-      - name: Inspect generated package
+      - name: Verify Debian package metadata
+        shell: bash
         run: |
-          ls -lah src-tauri/target/release/bundle/deb/
-          dpkg-deb --info src-tauri/target/release/bundle/deb/*.deb
+          set -euo pipefail
+          DEB="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$DEB"
+          ls -lah "$DEB"
+          dpkg-deb --info "$DEB"
+
+          PACKAGE="$(dpkg-deb --field "$DEB" Package)"
+          VERSION="$(dpkg-deb --field "$DEB" Version)"
+          ARCH="$(dpkg-deb --field "$DEB" Architecture)"
+          DEPENDS="$(dpkg-deb --field "$DEB" Depends)"
+
+          printf 'Package=%s\nVersion=%s\nArchitecture=%s\nDepends=%s\n' \
+            "$PACKAGE" "$VERSION" "$ARCH" "$DEPENDS"
+
+          test "$PACKAGE" = "kylin-stock"
+          test "$ARCH" = "arm64"
+          test -n "$VERSION"
+
+      - name: Install generated ARM64 deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          sudo dpkg -i "$DEB"
+
+          STATUS="$(dpkg-query -W -f='${db:Status-Status}' kylin-stock)"
+          VERSION="$(dpkg-query -W -f='${Version}' kylin-stock)"
+          ARCH="$(dpkg-query -W -f='${Architecture}' kylin-stock)"
+          printf 'Installed status=%s version=%s arch=%s\n' "$STATUS" "$VERSION" "$ARCH"
+          test "$STATUS" = "installed"
+          test "$ARCH" = "arm64"
+
+      - name: Verify installed executable and desktop entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$(command -v kylin-stock)"
+          test -x "$BIN"
+          file "$BIN"
+
+          if ldd "$BIN" | grep -F 'not found'; then
+            echo 'Missing shared library detected' >&2
+            exit 1
+          fi
+
+          DESKTOP="$(find /usr/share/applications -maxdepth 1 -type f -iname '*kylin*stock*.desktop' -print -quit)"
+          test -n "$DESKTOP"
+          printf 'Desktop entry: %s\n' "$DESKTOP"
+          cat "$DESKTOP"
+          grep -Fx 'Name=物资管理系统' "$DESKTOP"
+          grep -Eq '^Exec=.*kylin-stock' "$DESKTOP"
 
       - name: Upload ARM64 smoke artifact
         uses: actions/upload-artifact@v4
