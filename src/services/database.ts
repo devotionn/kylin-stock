@@ -94,6 +94,22 @@ export async function getDatabase() {
   return database ?? initializeDatabase()
 }
 
+export async function prepareDatabaseSnapshot() {
+  const db = await getDatabase()
+
+  // If a future release enables WAL mode, force committed WAL pages back into
+  // the main database before the pool is closed and the .db file is copied.
+  // On non-WAL databases this PRAGMA is harmless.
+  await db.select<Record<string, number>[]>('PRAGMA wal_checkpoint(TRUNCATE)')
+
+  // Never create a new backup from a database already reporting corruption.
+  const rows = await db.select<Record<string, string>[]>('PRAGMA quick_check')
+  const result = rows[0] ? String(Object.values(rows[0])[0] ?? '') : ''
+  if (result.toLowerCase() !== 'ok') {
+    throw new Error(`当前业务数据库未通过快速完整性检查：${result || '未知错误'}`)
+  }
+}
+
 export async function closeDatabase() {
   if (!database) return
   const current = database
