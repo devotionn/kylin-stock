@@ -102,7 +102,8 @@ export async function stockIn(input: StockOperationInput) {
 
 export async function stockOut(input: StockOperationInput) {
   validate(input)
-  if (!input.destination?.trim()) throw new Error('出库去向不能为空')
+  const destination = input.destination?.trim()
+  if (!destination) throw new Error('出库去向不能为空')
   return withTransaction(async () => {
     const db = await getDatabase()
     const rows = await db.select<{ quantity: number }[]>(
@@ -117,7 +118,7 @@ export async function stockOut(input: StockOperationInput) {
       (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
       VALUES ($1,'OUT',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [
       transactionNo('OUT'), input.materialId, input.locationId, input.quantity, input.occurredAt,
-      input.relatedUnit?.trim() || null, input.destination.trim(), input.handler?.trim() || null,
+      input.relatedUnit?.trim() || null, destination, input.handler?.trim() || null,
       input.receiver?.trim() || null, input.remark?.trim() || null, now,
     ])
     await db.execute(`UPDATE inventory_balances
