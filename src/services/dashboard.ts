@@ -3,9 +3,9 @@ import { localDayIsoRange } from '../utils/date'
 
 export interface DashboardStats {
   materialCount: number
-  stockTotal: number
-  todayIn: number
-  todayOut: number
+  stockedMaterialCount: number
+  todayInCount: number
+  todayOutCount: number
 }
 
 export interface RecentTransaction {
@@ -29,15 +29,19 @@ export async function loadDashboard() {
   const db = await getDatabase()
   const { start, end } = localDayIsoRange()
 
-  const [materialRows, stockRows, inRows, outRows, recent, overview] = await Promise.all([
+  const [materialRows, stockedRows, inRows, outRows, recent, overview] = await Promise.all([
     db.select<{ value: number }[]>(`SELECT COUNT(*) AS value FROM materials WHERE status=1`),
-    db.select<{ value: number }[]>(`SELECT COALESCE(SUM(quantity),0) AS value FROM inventory_balances`),
     db.select<{ value: number }[]>(`
-      SELECT COALESCE(SUM(quantity),0) AS value FROM stock_transactions
+      SELECT COUNT(DISTINCT material_id) AS value
+      FROM inventory_balances
+      WHERE quantity > 0
+    `),
+    db.select<{ value: number }[]>(`
+      SELECT COUNT(*) AS value FROM stock_transactions
       WHERE type='IN' AND occurred_at >= $1 AND occurred_at <= $2
     `, [start, end]),
     db.select<{ value: number }[]>(`
-      SELECT COALESCE(SUM(quantity),0) AS value FROM stock_transactions
+      SELECT COUNT(*) AS value FROM stock_transactions
       WHERE type='OUT' AND occurred_at >= $1 AND occurred_at <= $2
     `, [start, end]),
     db.select<RecentTransaction[]>(`
@@ -56,17 +60,17 @@ export async function loadDashboard() {
       JOIN materials m ON m.id=b.material_id
       LEFT JOIN units u ON u.id=m.unit_id
       GROUP BY b.material_id,m.name,u.name
-      HAVING SUM(b.quantity) <> 0
-      ORDER BY SUM(b.quantity) DESC,m.name
+      HAVING SUM(b.quantity) > 0
+      ORDER BY m.name
       LIMIT 8
     `),
   ])
 
   const stats: DashboardStats = {
     materialCount: Number(materialRows[0]?.value ?? 0),
-    stockTotal: Number(stockRows[0]?.value ?? 0),
-    todayIn: Number(inRows[0]?.value ?? 0),
-    todayOut: Number(outRows[0]?.value ?? 0),
+    stockedMaterialCount: Number(stockedRows[0]?.value ?? 0),
+    todayInCount: Number(inRows[0]?.value ?? 0),
+    todayOutCount: Number(outRows[0]?.value ?? 0),
   }
 
   return { stats, recent, overview }
