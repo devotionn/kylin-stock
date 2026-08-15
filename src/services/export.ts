@@ -2,6 +2,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import * as XLSX from 'xlsx'
 import type { InventoryRow, LedgerRow } from './inventory'
+import type { Material } from './masterData'
 
 function safeDateStamp() {
   const d = new Date()
@@ -32,6 +33,25 @@ async function saveWorkbook(workbook: XLSX.WorkBook, defaultName: string) {
 
 function setColumnWidths(sheet: XLSX.WorkSheet, widths: number[]) {
   sheet['!cols'] = widths.map((wch) => ({ wch }))
+}
+
+export async function exportMaterialRows(rows: Material[]) {
+  const data = [
+    ['物资名称', '计量单位', '分类', '默认存放位置', '备注', '状态'],
+    ...rows.map((row) => [
+      row.name,
+      row.unit_name ?? '',
+      row.category ?? '',
+      row.location_name ?? '',
+      row.remark ?? '',
+      row.status === 1 ? '正常' : '停用',
+    ]),
+  ]
+  const sheet = XLSX.utils.aoa_to_sheet(data)
+  setColumnWidths(sheet, [22, 12, 16, 20, 28, 10])
+  const book = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(book, sheet, '物资明细')
+  return saveWorkbook(book, `物资明细_${safeDateStamp()}.xlsx`)
 }
 
 export async function exportLedgerRows(rows: LedgerRow[]) {
