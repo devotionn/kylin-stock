@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { listLedger, type LedgerRow } from '../services/inventory'
 import { exportLedgerRows } from '../services/export'
+import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
 const exporting = ref(false)
@@ -100,7 +101,7 @@ onMounted(refresh)
       <el-table-column prop="destination" label="出库去向" min-width="150" />
       <el-table-column prop="handler" label="经办人" width="100" />
       <el-table-column prop="receiver" label="领用人" width="100" />
-      <el-table-column prop="occurred_at" label="业务时间" min-width="190" />
+      <el-table-column label="业务时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.occurred_at) }}</template></el-table-column>
       <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
     </el-table>
   </el-card>
