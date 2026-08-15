@@ -165,8 +165,10 @@ async fn stock_out_on_connection(
     let destination = clean(&input.destination).ok_or_else(|| "出库去向不能为空".to_string())?;
     begin_immediate(connection).await?;
 
+    // SQLite NUMERIC affinity may physically store whole values as INTEGER even
+    // when they were bound from f64. Cast explicitly so SQLx always decodes REAL.
     let available = match sqlx::query_scalar::<_, f64>(
-        "SELECT quantity FROM inventory_balances WHERE material_id=? AND location_id=?",
+        "SELECT CAST(quantity AS REAL) FROM inventory_balances WHERE material_id=? AND location_id=?",
     )
     .bind(input.material_id)
     .bind(input.location_id)
@@ -317,7 +319,7 @@ mod tests {
 
     async fn balance(connection: &mut SqliteConnection) -> f64 {
         sqlx::query_scalar::<_, f64>(
-            "SELECT COALESCE(quantity,0) FROM inventory_balances WHERE material_id=1 AND location_id=1",
+            "SELECT CAST(COALESCE(quantity,0) AS REAL) FROM inventory_balances WHERE material_id=1 AND location_id=1",
         )
         .fetch_optional(connection)
         .await
