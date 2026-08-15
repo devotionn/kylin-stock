@@ -9,14 +9,26 @@ Status: completed/ongoing confirmation.
 
 ## Phase 1 - Foundation
 
-- Initialize Vue 3 + TypeScript + Vite.
-- Initialize Tauri 2 desktop shell.
-- Establish project directory conventions.
-- Add Element Plus.
-- Add SQLite persistence and migrations.
-- Add global error handling and logging.
-- Build application shell/sidebar/topbar.
-- Validate development build.
+Status: **in progress**.
+
+Completed:
+
+- Vue 3 + TypeScript + Vite project skeleton.
+- Tauri 2 desktop shell.
+- Project directory conventions.
+- Element Plus application shell/sidebar/topbar.
+- SQLite initialization layer and initial schema.
+- Tauri SQL and dialog capability configuration.
+- Customer-required centered table styling baseline.
+- Main navigation entries for all V1 modules.
+
+Remaining before Phase 1 exit:
+
+- Install dependencies and generate lockfiles in a build environment.
+- Validate `npm run build`.
+- Validate `tauri dev` desktop startup.
+- Validate SQLite initialization/read/write on Linux.
+- Add structured logging/error boundary.
 
 Exit criteria: application opens as desktop window and can initialize/read/write local SQLite database.
 
