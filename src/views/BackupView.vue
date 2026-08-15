@@ -42,16 +42,20 @@ async function runRestore() {
   const source = await chooseRestoreFile()
   if (!source) return
 
-  await ElMessageBox.confirm(
-    '恢复操作会使用所选备份替换当前业务数据。系统会先自动保留一份恢复前安全副本。确认继续吗？',
-    '确认恢复数据',
-    {
-      type: 'warning',
-      confirmButtonText: '确认恢复',
-      cancelButtonText: '取消',
-      distinguishCancelAndClose: true,
-    },
-  )
+  try {
+    await ElMessageBox.confirm(
+      '恢复操作会使用所选备份替换当前业务数据。系统会先自动保留一份恢复前安全副本。确认继续吗？',
+      '确认恢复数据',
+      {
+        type: 'warning',
+        confirmButtonText: '确认恢复',
+        cancelButtonText: '取消',
+        distinguishCancelAndClose: true,
+      },
+    )
+  } catch {
+    return
+  }
 
   restoring.value = true
   try {
