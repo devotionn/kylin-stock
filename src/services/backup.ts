@@ -38,6 +38,27 @@ function fileName(path: string) {
   return path.split(/[\\/]/).pop() || path
 }
 
+async function withDatabaseClosed<T>(operation: () => Promise<T>): Promise<T> {
+  await closeDatabase()
+  let operationError: unknown
+  try {
+    return await operation()
+  } catch (error) {
+    operationError = error
+    throw error
+  } finally {
+    try {
+      await reopenDatabase()
+    } catch (reopenError) {
+      if (operationError) {
+        console.error('数据库操作失败后重新打开数据库也失败', reopenError)
+      } else {
+        throw new Error(`数据库文件操作完成，但重新打开数据库失败：${String(reopenError)}`)
+      }
+    }
+  }
+}
+
 async function recordBackup(input: {
   path: string
   type: BackupType
@@ -86,13 +107,9 @@ export async function createBackup(type: BackupType, year?: number) {
   })
   if (!destination) return null
 
-  let result: NativeBackupResult
-  await closeDatabase()
-  try {
-    result = await invoke<NativeBackupResult>('create_database_backup', { destination })
-  } finally {
-    await reopenDatabase()
-  }
+  const result = await withDatabaseClosed(() =>
+    invoke<NativeBackupResult>('create_database_backup', { destination }),
+  )
 
   await recordBackup({
     path: destination,
@@ -115,23 +132,16 @@ export async function chooseRestoreFile() {
 }
 
 export async function restoreBackup(source: string) {
-  let result: NativeRestoreResult
-  await closeDatabase()
-  try {
-    result = await invoke<NativeRestoreResult>('restore_database_backup', { source })
-  } finally {
-    await reopenDatabase()
-  }
+  const result = await withDatabaseClosed(() =>
+    invoke<NativeRestoreResult>('restore_database_backup', { source }),
+  )
 
   const healthy = await checkDatabaseIntegrity()
   if (!healthy) {
     if (result.safetyBackupPath) {
-      await closeDatabase()
-      try {
-        await invoke<NativeRestoreResult>('restore_database_backup', { source: result.safetyBackupPath })
-      } finally {
-        await reopenDatabase()
-      }
+      await withDatabaseClosed(() =>
+        invoke<NativeRestoreResult>('restore_database_backup', { source: result.safetyBackupPath! }),
+      )
     }
     throw new Error('所选备份未通过完整性检查，系统已尝试恢复到操作前的数据')
   }
