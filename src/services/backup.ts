@@ -38,6 +38,10 @@ function fileName(path: string) {
   return path.split(/[\\/]/).pop() || path
 }
 
+function errorText(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 async function withDatabaseClosed<T>(operation: () => Promise<T>): Promise<T> {
   await closeDatabase()
   let operationError: unknown
@@ -53,7 +57,7 @@ async function withDatabaseClosed<T>(operation: () => Promise<T>): Promise<T> {
       if (operationError) {
         console.error('数据库操作失败后重新打开数据库也失败', reopenError)
       } else {
-        throw new Error(`数据库文件操作完成，但重新打开数据库失败：${String(reopenError)}`)
+        throw new Error(`数据库文件操作完成，但重新打开数据库失败：${errorText(reopenError)}`)
       }
     }
   }
@@ -80,6 +84,63 @@ async function recordBackup(input: {
       now,
       input.remark?.trim() || null,
     ],
+  )
+}
+
+async function rollbackFailedRestore(
+  safetyBackupPath: string,
+  safetyBackupSize: number | null,
+  originalError: unknown,
+): Promise<never> {
+  // This helper is deliberately separate from withDatabaseClosed(): a failed
+  // restored database may be impossible to reopen, so rollback must happen
+  // while the pool remains closed.
+  try {
+    await closeDatabase()
+  } catch (closeError) {
+    throw new Error(
+      `恢复后的数据库异常（${errorText(originalError)}），且无法安全关闭连接以执行自动回滚：${errorText(closeError)}。` +
+      `恢复前安全副本仍位于：${safetyBackupPath}`,
+    )
+  }
+
+  try {
+    await invoke<NativeRestoreResult>('restore_database_backup', { source: safetyBackupPath })
+  } catch (rollbackError) {
+    throw new Error(
+      `恢复后的数据库异常（${errorText(originalError)}），自动写回恢复前安全副本也失败：${errorText(rollbackError)}。` +
+      `请停止继续操作并保留安全副本：${safetyBackupPath}`,
+    )
+  }
+
+  try {
+    await reopenDatabase()
+    const rollbackHealthy = await checkDatabaseIntegrity()
+    if (!rollbackHealthy) {
+      throw new Error('恢复前安全副本重新写回后未通过 integrity_check')
+    }
+  } catch (reopenError) {
+    throw new Error(
+      `恢复后的数据库异常（${errorText(originalError)}）；系统已尝试写回恢复前安全副本，但数据库仍无法正常打开：${errorText(reopenError)}。` +
+      `请停止继续操作并保留安全副本：${safetyBackupPath}`,
+    )
+  }
+
+  try {
+    await recordBackup({
+      path: safetyBackupPath,
+      type: 'MANUAL',
+      size: safetyBackupSize,
+      remark: '恢复失败后已自动写回的恢复前安全副本',
+    })
+  } catch (recordError) {
+    // Rollback itself has succeeded; failure to add a history-row must not
+    // turn a recovered database back into a failed recovery state.
+    console.error('恢复前安全副本已成功写回，但备份记录写入失败', recordError)
+  }
+
+  throw new Error(
+    `所选备份未能安全恢复：${errorText(originalError)}。系统已自动恢复到本次操作前的数据。`,
   )
 }
 
@@ -136,18 +197,50 @@ export async function chooseRestoreFile() {
 }
 
 export async function restoreBackup(source: string) {
-  const result = await withDatabaseClosed(() =>
-    invoke<NativeRestoreResult>('restore_database_backup', { source }),
-  )
+  // Restore has a stricter lifecycle than ordinary file operations. We cannot
+  // use withDatabaseClosed() here because a bad restored file may make the
+  // first reopen fail; the pre-restore safety copy must still be available for
+  // an automatic rollback in that state.
+  await closeDatabase()
 
-  const healthy = await checkDatabaseIntegrity()
-  if (!healthy) {
-    if (result.safetyBackupPath) {
-      await withDatabaseClosed(() =>
-        invoke<NativeRestoreResult>('restore_database_backup', { source: result.safetyBackupPath! }),
+  let result: NativeRestoreResult
+  try {
+    result = await invoke<NativeRestoreResult>('restore_database_backup', { source })
+  } catch (restoreError) {
+    try {
+      await reopenDatabase()
+    } catch (reopenError) {
+      throw new Error(
+        `备份文件未完成恢复（${errorText(restoreError)}），随后原业务数据库也无法重新打开：${errorText(reopenError)}`,
       )
     }
-    throw new Error('所选备份未通过完整性检查，系统已尝试恢复到操作前的数据')
+    throw restoreError
+  }
+
+  try {
+    await reopenDatabase()
+  } catch (reopenError) {
+    if (result.safetyBackupPath) {
+      return rollbackFailedRestore(result.safetyBackupPath, result.safetyBackupSize, reopenError)
+    }
+    throw new Error(
+      `恢复文件已替换数据库，但数据库无法重新打开：${errorText(reopenError)}。本次操作前不存在可自动回滚的数据库副本，请停止继续操作。`,
+    )
+  }
+
+  let integrityError: unknown = null
+  try {
+    const healthy = await checkDatabaseIntegrity()
+    if (!healthy) integrityError = new Error('所选备份未通过 integrity_check')
+  } catch (error) {
+    integrityError = error
+  }
+
+  if (integrityError) {
+    if (result.safetyBackupPath) {
+      return rollbackFailedRestore(result.safetyBackupPath, result.safetyBackupSize, integrityError)
+    }
+    throw new Error(`恢复后的数据库完整性检查失败：${errorText(integrityError)}`)
   }
 
   if (result.safetyBackupPath) {
