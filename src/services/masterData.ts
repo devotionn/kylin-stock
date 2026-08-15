@@ -63,6 +63,24 @@ export async function saveMaterial(input: {
   const db = await getDatabase()
   const name = input.name.trim()
   if (!name) throw new Error('物资名称不能为空')
+
+  // V1 intentionally has no user-visible product/SKU code. Therefore the
+  // material name is the human-facing identity and duplicate names would make
+  // stock-in/out selections ambiguous. Reject duplicates, including disabled
+  // historical records; users can re-enable the existing material instead.
+  const conflicts = await db.select<{ id: number; status: number }[]>(`
+    SELECT id, status
+    FROM materials
+    WHERE name = $1 COLLATE NOCASE
+      AND ($2 IS NULL OR id <> $2)
+    LIMIT 1
+  `, [name, input.id ?? null])
+  if (conflicts.length) {
+    throw new Error(conflicts[0].status === 0
+      ? '已存在同名物资，但当前处于停用状态，请直接重新启用原物资'
+      : '已存在同名物资，请勿重复添加')
+  }
+
   const timestamp = now()
   if (input.id) {
     return db.execute(`UPDATE materials SET name=$1, unit_id=$2, category=$3,
