@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { checkDatabaseIntegrity, closeDatabase, getDatabase, reopenDatabase } from './database'
+import { checkDatabaseIntegrity, closeDatabase, getDatabase, prepareDatabaseSnapshot, reopenDatabase } from './database'
 
 export type BackupType = 'MANUAL' | 'ANNUAL'
 
@@ -106,6 +106,10 @@ export async function createBackup(type: BackupType, year?: number) {
     filters: [{ name: 'KylinStock 数据库备份', extensions: ['db'] }],
   })
   if (!destination) return null
+
+  // Flush any committed WAL pages and verify the live database before closing
+  // the SQL pool and creating a file-level snapshot.
+  await prepareDatabaseSnapshot()
 
   const result = await withDatabaseClosed(() =>
     invoke<NativeBackupResult>('create_database_backup', { destination }),
