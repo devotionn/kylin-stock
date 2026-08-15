@@ -2,14 +2,14 @@
 
 ## Phase 0 - Requirements Baseline
 
-Status: completed/ongoing confirmation.
+Status: **completed / continuously maintained**.
 
-- REQUIREMENTS.md maintained as scope baseline.
-- New customer feedback increments document version.
+- REQUIREMENTS.md is the V1 scope baseline.
+- New customer feedback increments the document version before implementation.
 
 ## Phase 1 - Foundation
 
-Status: **in progress**.
+Status: **implemented, build validation pending**.
 
 Completed:
 
@@ -18,11 +18,11 @@ Completed:
 - Project directory conventions.
 - Element Plus application shell/sidebar/topbar.
 - SQLite initialization layer and initial schema.
-- Tauri SQL and dialog capability configuration.
+- Tauri SQL/dialog/filesystem capability configuration.
 - Customer-required centered table styling baseline.
 - Main navigation entries for all V1 modules.
 
-Remaining before Phase 1 exit:
+Remaining validation:
 
 - Install dependencies and generate lockfiles in a build environment.
 - Validate `npm run build`.
@@ -30,44 +30,70 @@ Remaining before Phase 1 exit:
 - Validate SQLite initialization/read/write on Linux.
 - Add structured logging/error boundary.
 
-Exit criteria: application opens as desktop window and can initialize/read/write local SQLite database.
-
 ## Phase 2 - Master Data
 
-- Materials CRUD.
-- Units.
-- Locations.
-- Disable/archive semantics.
-- Centered table UI convention.
+Status: **implemented and merged to main**.
 
-Exit criteria: user can maintain all data required before stock operations.
+Completed:
+
+- Materials create/edit/search.
+- Units quick creation.
+- Locations quick creation.
+- Disable/re-enable semantics instead of deleting historical master data.
+- Customer-required centered table convention.
+- Material query result XLSX export added during Phase 4.
 
 ## Phase 3 - Inventory Core
 
-- Stock-in form and transaction.
-- Stock-out form and destination.
-- Insufficient-stock guard.
-- Current inventory.
-- Inventory distribution.
-- Transaction ledger.
+Status: **implemented and merged to main**.
 
-Exit criteria: end-to-end `material -> stock in -> stock -> stock out -> destination -> ledger` is correct and transaction-safe.
+Completed:
+
+- Stock-in form and transaction.
+- Stock-out form and mandatory destination.
+- Insufficient-stock guard / no normal negative inventory.
+- Per-material/per-location inventory balances.
+- Current inventory view.
+- Inventory distribution view.
+- Transaction ledger.
+- Atomic SQLite transaction semantics for ledger + balance changes.
+
+Core flow now exists:
+
+`material -> stock in -> inventory -> stock out -> destination -> ledger`
 
 ## Phase 4 - Query & Export
 
-- Name filter.
-- Date range filter.
-- Unit filter.
-- Transaction type filter.
-- Destination filter.
-- Combined filters.
-- Export current query result.
-- Export transaction details.
-- Export inventory distribution.
+Status: **implemented on `feat/query-export`, validation pending**.
 
-Exit criteria: exported rows match visible query semantics.
+Implemented:
+
+- Material-name filter.
+- Date-range filter.
+- Related-unit filter.
+- Transaction-type filter.
+- Destination filter.
+- Combined ledger filters.
+- Inventory filters for material name, measurement unit and location.
+- Native system save dialog.
+- XLSX workbook generation.
+- Export current material query results.
+- Export current transaction query results.
+- Export current inventory/distribution query results.
+- “What is queried is what is exported” semantics: export uses the exact rows currently shown in the table.
+
+Validation remaining:
+
+- TypeScript/Vite build.
+- Tauri filesystem permission check.
+- `.xlsx` opening and Chinese-content validation in target office software.
+- Real Kylin V10 / ARM64 save-dialog and file-write test.
 
 ## Phase 5 - Backup & Restore
+
+Status: **next**.
+
+Planned:
 
 - Manual backup.
 - Annual-labelled backup.
@@ -75,18 +101,20 @@ Exit criteria: exported rows match visible query semantics.
 - Restore confirmation.
 - Restore flow.
 - Failure handling.
+- Backup integrity checks where practical.
 
 Exit criteria: a test database can be backed up, modified and restored correctly.
 
 ## Phase 6 - UX Hardening
 
-- Dashboard.
+- Dashboard with real database statistics.
 - Empty/loading/error states.
-- Form validation.
+- Stronger form validation.
 - Long-text handling.
 - Chinese UI consistency.
 - Confirmation dialogs for destructive actions.
 - Table alignment requirement verification.
+- Human-readable local date/time formatting.
 
 ## Phase 7 - Kylin ARM64 Compatibility
 
@@ -98,7 +126,7 @@ Validate:
 - native dependencies;
 - SQLite;
 - Chinese IME/fonts;
-- export/file picker;
+- XLSX export/file picker;
 - backup paths;
 - desktop launcher;
 - package installation;

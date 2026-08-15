@@ -2,8 +2,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createLocation, createUnit, listLocations, listMaterials, listUnits, saveMaterial, setMaterialStatus, type Location, type Material, type Unit } from '../services/masterData'
+import { exportMaterialRows } from '../services/export'
 
 const loading = ref(false)
+const exporting = ref(false)
 const keyword = ref('')
 const materials = ref<Material[]>([])
 const units = ref<Unit[]>([])
@@ -36,6 +38,18 @@ async function quickLocation() {
   const { value } = await ElMessageBox.prompt('请输入存放位置，例如：一号库、A区货架', '新增存放位置', { inputPattern: /\S+/, inputErrorMessage: '位置不能为空' })
   await createLocation(value); ElMessage.success('位置已添加'); await refresh()
 }
+async function exportCurrent() {
+  if (!materials.value.length) return ElMessage.warning('当前没有可导出的物资数据')
+  exporting.value = true
+  try {
+    const path = await exportMaterialRows(materials.value)
+    if (path) ElMessage.success('物资明细已导出')
+  } catch (e) {
+    ElMessage.error(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    exporting.value = false
+  }
+}
 onMounted(refresh)
 </script>
 
@@ -46,6 +60,7 @@ onMounted(refresh)
         <el-input v-model="keyword" clearable placeholder="搜索物资名称或分类" style="width: 280px" @keyup.enter="refresh" />
         <el-button type="primary" @click="refresh">查询</el-button>
         <el-button @click="keyword=''; refresh()">重置</el-button>
+        <el-button type="success" :loading="exporting" :disabled="!materials.length" @click="exportCurrent">导出当前结果（{{ materials.length }}）</el-button>
       </div>
       <div>
         <el-button @click="quickUnit">新增单位</el-button>
@@ -79,5 +94,5 @@ onMounted(refresh)
 
 <style scoped>
 .toolbar { display:flex; justify-content:space-between; gap:16px; margin-bottom:18px; flex-wrap:wrap; }
-.search-group { display:flex; gap:10px; }
+.search-group { display:flex; gap:10px; flex-wrap:wrap; }
 </style>
