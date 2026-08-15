@@ -97,7 +97,7 @@ onMounted(refresh)
         <div class="action-block">
           <div class="action-title">即时备份</div>
           <div class="action-desc">适合日常操作前、重要数据录入后随时创建。</div>
-          <el-button type="primary" :loading="backingUp" :disabled="operationBusy && !backingUp" @click="runBackup('MANUAL')">创建即时备份</el-button>
+          <el-button type="primary" :loading="backingUp" :disabled="operationBusy" @click="runBackup('MANUAL')">创建即时备份</el-button>
         </div>
 
         <div class="action-block">
@@ -105,14 +105,14 @@ onMounted(refresh)
           <div class="action-desc">为指定年度创建明确标记的归档副本。</div>
           <div class="annual-row">
             <el-input-number v-model="year" :min="2000" :max="2100" :step="1" :controls="false" :disabled="operationBusy" style="width:120px" />
-            <el-button type="success" :loading="backingUp" :disabled="operationBusy && !backingUp" @click="runBackup('ANNUAL')">创建年度备份</el-button>
+            <el-button type="success" :loading="backingUp" :disabled="operationBusy" @click="runBackup('ANNUAL')">创建年度备份</el-button>
           </div>
         </div>
 
         <div class="action-block danger-block">
           <div class="action-title">从备份恢复</div>
           <div class="action-desc">选择 `.db` 备份恢复。恢复前会自动创建当前数据的安全副本。</div>
-          <el-button type="danger" :loading="restoring" :disabled="operationBusy && !restoring" @click="runRestore">选择备份并恢复</el-button>
+          <el-button type="danger" :loading="restoring" :disabled="operationBusy" @click="runRestore">选择备份并恢复</el-button>
         </div>
       </div>
     </el-card>
