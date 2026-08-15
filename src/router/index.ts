@@ -1,10 +1,11 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import DashboardView from '../views/DashboardView.vue'
+import MaterialsView from '../views/MaterialsView.vue'
 import PlaceholderView from '../views/PlaceholderView.vue'
 
 const routes = [
   { path: '/', component: DashboardView, meta: { title: '库存总览', subtitle: '查看当前库存与近期业务情况' } },
-  { path: '/materials', component: PlaceholderView, meta: { title: '物资管理', subtitle: '维护物资名称、单位和存放位置' } },
+  { path: '/materials', component: MaterialsView, meta: { title: '物资管理', subtitle: '维护物资名称、单位和存放位置' } },
   { path: '/stock-in', component: PlaceholderView, meta: { title: '入库登记', subtitle: '登记物资入库并自动增加库存' } },
   { path: '/stock-out', component: PlaceholderView, meta: { title: '出库登记', subtitle: '登记物资出库、领用单位与去向' } },
   { path: '/inventory', component: PlaceholderView, meta: { title: '当前库存', subtitle: '查询物资当前余额' } },
@@ -13,7 +14,4 @@ const routes = [
   { path: '/backup', component: PlaceholderView, meta: { title: '备份与恢复', subtitle: '创建即时备份或年度归档' } },
 ]
 
-export default createRouter({
-  history: createWebHashHistory(),
-  routes,
-})
+export default createRouter({ history: createWebHashHistory(), routes })
