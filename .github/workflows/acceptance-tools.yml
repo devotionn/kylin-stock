@@ -1,0 +1,31 @@
+name: Acceptance Tooling Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance-tooling:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Bash syntax
+        run: |
+          bash -n scripts/kylin-doctor.sh
+          bash -n scripts/kylin-acceptance-evidence.sh
+
+      - name: Run read-only evidence collector smoke
+        run: |
+          bash scripts/kylin-acceptance-evidence.sh | tee /tmp/kylin-acceptance-evidence.txt
+          test -s /tmp/kylin-acceptance-evidence.txt
+          grep -F 'Acceptance Evidence Summary' /tmp/kylin-acceptance-evidence.txt
+          grep -F 'This collector is intentionally read-only' /tmp/kylin-acceptance-evidence.txt
