@@ -93,3 +93,25 @@ export async function initializeDatabase() {
 export async function getDatabase() {
   return database ?? initializeDatabase()
 }
+
+export async function closeDatabase() {
+  if (!database) return
+  const current = database
+  database = null
+  const closed = await current.close()
+  if (!closed) {
+    database = current
+    throw new Error('数据库连接未能安全关闭')
+  }
+}
+
+export async function reopenDatabase() {
+  if (database) await closeDatabase()
+  return initializeDatabase()
+}
+
+export async function checkDatabaseIntegrity() {
+  const rows = await (await getDatabase()).select<Record<string, string>[]>('PRAGMA integrity_check')
+  const result = rows[0] ? String(Object.values(rows[0])[0] ?? '') : ''
+  return result.toLowerCase() === 'ok'
+}

@@ -4,7 +4,7 @@ import MaterialsView from '../views/MaterialsView.vue'
 import StockOperationView from '../views/StockOperationView.vue'
 import InventoryView from '../views/InventoryView.vue'
 import LedgerView from '../views/LedgerView.vue'
-import PlaceholderView from '../views/PlaceholderView.vue'
+import BackupView from '../views/BackupView.vue'
 
 const routes = [
   { path: '/', component: DashboardView, meta: { title: '库存总览', subtitle: '查看当前库存与近期业务情况' } },
@@ -13,8 +13,8 @@ const routes = [
   { path: '/stock-out', component: StockOperationView, meta: { title: '出库登记', subtitle: '登记物资出库、领用单位与去向' } },
   { path: '/inventory', component: InventoryView, meta: { title: '当前库存', subtitle: '查询物资当前余额' } },
   { path: '/distribution', component: InventoryView, meta: { title: '库存物资分布', subtitle: '查看各存放位置的库存分布' } },
-  { path: '/ledger', component: LedgerView, meta: { title: '出入库明细', subtitle: '按名称、单位和去向查询流水' } },
-  { path: '/backup', component: PlaceholderView, meta: { title: '备份与恢复', subtitle: '创建即时备份或年度归档' } },
+  { path: '/ledger', component: LedgerView, meta: { title: '出入库明细', subtitle: '按名称、时间、单位和去向查询流水' } },
+  { path: '/backup', component: BackupView, meta: { title: '备份与恢复', subtitle: '创建即时备份、年度归档或恢复历史数据' } },
 ]
 
 export default createRouter({ history: createWebHashHistory(), routes })

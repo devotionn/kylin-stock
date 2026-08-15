@@ -64,9 +64,9 @@ Core flow now exists:
 
 ## Phase 4 - Query & Export
 
-Status: **implemented on `feat/query-export`, validation pending**.
+Status: **implemented and merged to main; target-machine validation pending**.
 
-Implemented:
+Completed:
 
 - Material-name filter.
 - Date-range filter.
@@ -91,21 +91,44 @@ Validation remaining:
 
 ## Phase 5 - Backup & Restore
 
-Status: **next**.
+Status: **implemented on `feat/backup-restore`, validation pending**.
 
-Planned:
+Implemented:
 
-- Manual backup.
-- Annual-labelled backup.
-- Backup list/metadata.
-- Restore confirmation.
-- Restore flow.
-- Failure handling.
-- Backup integrity checks where practical.
+- Manual backup with native save dialog.
+- Annual-labelled full database snapshot.
+- Backup history / metadata.
+- Native Rust database file backup command.
+- SQLite connection pool is closed before file-level backup or restore.
+- Native backup uses temporary-file + sync + rename semantics.
+- Restore-file SQLite header validation.
+- Restore confirmation in UI.
+- Automatic pre-restore safety backup.
+- Database replacement through temporary and old-file swap.
+- Rollback to previous database if restored target cannot be safely synced.
+- Post-restore `PRAGMA integrity_check`.
+- Automatic attempt to recover the pre-restore safety copy if integrity check fails.
+- Database connection reopened after backup/restore lifecycle.
 
-Exit criteria: a test database can be backed up, modified and restored correctly.
+Implementation note:
+
+`sqlite:kylin-stock.db` is resolved by the current Tauri SQL plugin under the Tauri `app_config_dir`; the native backup module deliberately resolves the same directory before accessing `kylin-stock.db`.
+
+Validation remaining:
+
+- TypeScript build.
+- Rust `cargo check` / Tauri build.
+- Manual backup-create test.
+- Annual-backup test.
+- Modify-data -> restore -> data-recovered test.
+- Corrupt/non-SQLite file rejection test.
+- USB/removable-media backup target test on Kylin.
+
+Exit criteria: a test database can be backed up, modified and restored correctly without losing the pre-restore safety copy.
 
 ## Phase 6 - UX Hardening
+
+Status: **next after build validation**.
 
 - Dashboard with real database statistics.
 - Empty/loading/error states.
@@ -127,7 +150,8 @@ Validate:
 - SQLite;
 - Chinese IME/fonts;
 - XLSX export/file picker;
-- backup paths;
+- backup/restore paths;
+- removable-media write;
 - desktop launcher;
 - package installation;
 - reboot persistence.
