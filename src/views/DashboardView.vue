@@ -5,15 +5,15 @@ import { loadDashboard, type DashboardStats, type RecentTransaction, type StockO
 import { formatDateTime } from '../utils/date'
 
 const loading = ref(false)
-const stats = ref<DashboardStats>({ materialCount: 0, stockTotal: 0, todayIn: 0, todayOut: 0 })
+const stats = ref<DashboardStats>({ materialCount: 0, stockedMaterialCount: 0, todayInCount: 0, todayOutCount: 0 })
 const recent = ref<RecentTransaction[]>([])
 const overview = ref<StockOverviewRow[]>([])
 
 const cards = computed(() => [
   { label: '物资品种', value: stats.value.materialCount, note: '当前正常建档物资' },
-  { label: '库存总量', value: stats.value.stockTotal, note: '全部存放位置库存汇总' },
-  { label: '今日入库', value: stats.value.todayIn, note: '按本机自然日统计' },
-  { label: '今日出库', value: stats.value.todayOut, note: '按本机自然日统计' },
+  { label: '有库存物资', value: stats.value.stockedMaterialCount, note: '当前库存大于 0 的物资种类' },
+  { label: '今日入库', value: stats.value.todayInCount, note: '今日入库业务笔数' },
+  { label: '今日出库', value: stats.value.todayOutCount, note: '今日出库业务笔数' },
 ])
 
 async function refresh() {
@@ -36,7 +36,7 @@ onMounted(refresh)
 <template>
   <div v-loading="loading" class="page-stack">
     <div class="page-actions">
-      <span class="page-hint">数据来自本机 SQLite 业务库</span>
+      <span class="page-hint">不同计量单位不做无意义的跨单位数量相加</span>
       <el-button @click="refresh">刷新数据</el-button>
     </div>
 
