@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { checkDatabaseIntegrity, closeDatabase, getDatabase, prepareDatabaseSnapshot, reopenDatabase } from './database'
+import { checkDatabaseIntegrity, closeDatabase, getDatabase, reopenDatabase } from './database'
 
 export type BackupType = 'MANUAL' | 'ANNUAL'
 
@@ -42,27 +42,6 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function withDatabaseClosed<T>(operation: () => Promise<T>): Promise<T> {
-  await closeDatabase()
-  let operationError: unknown
-  try {
-    return await operation()
-  } catch (error) {
-    operationError = error
-    throw error
-  } finally {
-    try {
-      await reopenDatabase()
-    } catch (reopenError) {
-      if (operationError) {
-        console.error('数据库操作失败后重新打开数据库也失败', reopenError)
-      } else {
-        throw new Error(`数据库文件操作完成，但重新打开数据库失败：${errorText(reopenError)}`)
-      }
-    }
-  }
-}
-
 async function recordBackup(input: {
   path: string
   type: BackupType
@@ -92,9 +71,8 @@ async function rollbackFailedRestore(
   safetyBackupSize: number | null,
   originalError: unknown,
 ): Promise<never> {
-  // This helper is deliberately separate from withDatabaseClosed(): a failed
-  // restored database may be impossible to reopen, so rollback must happen
-  // while the pool remains closed.
+  // A failed restored database may be impossible to reopen, so rollback must
+  // happen while the SQL pool remains closed.
   try {
     await closeDatabase()
   } catch (closeError) {
@@ -168,13 +146,10 @@ export async function createBackup(type: BackupType, year?: number) {
   })
   if (!destination) return null
 
-  // Flush any committed WAL pages and verify the live database before closing
-  // the SQL pool and creating a file-level snapshot.
-  await prepareDatabaseSnapshot()
-
-  const result = await withDatabaseClosed(() =>
-    invoke<NativeBackupResult>('create_database_backup', { destination }),
-  )
+  // Rust uses SQLite VACUUM INTO to produce a transactional snapshot of the
+  // live database. The frontend SQL pool stays open; no raw .db copy is used
+  // for user-created backups.
+  const result = await invoke<NativeBackupResult>('create_database_backup', { destination })
 
   await recordBackup({
     path: destination,
@@ -197,10 +172,8 @@ export async function chooseRestoreFile() {
 }
 
 export async function restoreBackup(source: string) {
-  // Restore has a stricter lifecycle than ordinary file operations. We cannot
-  // use withDatabaseClosed() here because a bad restored file may make the
-  // first reopen fail; the pre-restore safety copy must still be available for
-  // an automatic rollback in that state.
+  // Restore has a stricter lifecycle than backup creation. The current pool is
+  // deliberately closed because the live database file will be replaced.
   await closeDatabase()
 
   let result: NativeRestoreResult
