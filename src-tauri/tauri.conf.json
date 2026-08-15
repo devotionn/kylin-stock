@@ -29,7 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "category": "Office",
+    "category": "Business",
     "shortDescription": "物资出入库与库存管理系统"
   }
 }
