@@ -144,7 +144,20 @@ pub fn restore_database_backup(app: AppHandle, source: String) -> Result<Restore
         }
         return Err(format!("无法替换业务数据库：{error}"));
     }
-    sync_file(&target)?;
+
+    if let Err(error) = sync_file(&target) {
+        let failed = app_config.join(format!("failed-restore-{}.db", timestamp_millis()));
+        let _ = fs::rename(&target, &failed);
+        if old.exists() {
+            if let Err(rollback_error) = fs::rename(&old, &target) {
+                return Err(format!(
+                    "恢复文件落盘失败：{error}；同时旧数据库回滚失败：{rollback_error}。恢复前安全副本仍保存在 backups 目录，请停止继续操作并人工恢复。"
+                ));
+            }
+            let _ = sync_file(&target);
+        }
+        return Err(format!("恢复文件未能安全落盘：{error}，已回滚到恢复前数据库"));
+    }
 
     if old.exists() {
         let _ = fs::remove_file(&old);
