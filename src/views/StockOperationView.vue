@@ -32,10 +32,14 @@ function onMaterialChange(id: number) {
 }
 
 function reset() {
+  if (submitting.value) return
   Object.assign(form, { materialId: undefined, locationId: undefined, quantity: 1, occurredAt: toLocalInputValue(), relatedUnit: '', destination: '', handler: '', receiver: '', remark: '' })
 }
 
 async function submit() {
+  // Loading state alone is not a correctness guard: two click events can enter
+  // this function before Vue has rendered the disabled/loading button state.
+  if (submitting.value) return
   if (!form.materialId) return ElMessage.warning('请选择物资')
   if (!form.locationId) return ElMessage.warning('请选择存放位置')
   if (!form.occurredAt) return ElMessage.warning('请选择业务时间')
@@ -47,12 +51,14 @@ async function submit() {
     if (isOut.value) await stockOut(payload)
     else await stockIn(payload)
     ElMessage.success(isOut.value ? '出库登记成功' : '入库登记成功')
-    reset()
+    Object.assign(form, { materialId: undefined, locationId: undefined, quantity: 1, occurredAt: toLocalInputValue(), relatedUnit: '', destination: '', handler: '', receiver: '', remark: '' })
   } catch (e) { ElMessage.error(e instanceof Error ? e.message : String(e)) }
   finally { submitting.value = false }
 }
 
-watch(() => route.path, () => reset())
+watch(() => route.path, () => {
+  if (!submitting.value) reset()
+})
 onMounted(load)
 </script>
 
@@ -60,7 +66,7 @@ onMounted(load)
   <el-card v-loading="loading" shadow="never" class="operation-card">
     <template #header><strong>{{ isOut ? '出库登记' : '入库登记' }}</strong></template>
     <el-alert v-if="!materials.length && !loading" title="还没有可用物资，请先到“物资管理”新增并启用物资。" type="warning" :closable="false" show-icon style="margin-bottom:18px" />
-    <el-form label-width="110px" style="max-width: 720px">
+    <el-form label-width="110px" style="max-width: 720px" :disabled="submitting">
       <el-form-item label="物资名称" required>
         <el-select v-model="form.materialId" filterable style="width:100%" placeholder="请选择物资" @change="onMaterialChange">
           <el-option v-for="item in materials" :key="item.id" :label="`${item.name}${item.unit_name ? `（${item.unit_name}）` : ''}`" :value="item.id" />
@@ -74,7 +80,7 @@ onMounted(load)
       <el-form-item label="经办人"><el-input v-model="form.handler" /></el-form-item>
       <el-form-item v-if="isOut" label="领用人"><el-input v-model="form.receiver" /></el-form-item>
       <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="3" /></el-form-item>
-      <el-form-item><el-button type="primary" :disabled="!materials.length || !locations.length" :loading="submitting" @click="submit">确认{{ isOut ? '出库' : '入库' }}</el-button><el-button @click="reset">重置</el-button></el-form-item>
+      <el-form-item><el-button type="primary" :disabled="submitting || !materials.length || !locations.length" :loading="submitting" @click="submit">确认{{ isOut ? '出库' : '入库' }}</el-button><el-button :disabled="submitting" @click="reset">重置</el-button></el-form-item>
     </el-form>
   </el-card>
 </template>
