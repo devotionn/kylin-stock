@@ -1,10 +1,11 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import DashboardView from '../views/DashboardView.vue'
-import MaterialsView from '../views/MaterialsView.vue'
-import StockOperationView from '../views/StockOperationView.vue'
-import InventoryView from '../views/InventoryView.vue'
-import LedgerView from '../views/LedgerView.vue'
-import BackupView from '../views/BackupView.vue'
+
+const DashboardView = () => import('../views/DashboardView.vue')
+const MaterialsView = () => import('../views/MaterialsView.vue')
+const StockOperationView = () => import('../views/StockOperationView.vue')
+const InventoryView = () => import('../views/InventoryView.vue')
+const LedgerView = () => import('../views/LedgerView.vue')
+const BackupView = () => import('../views/BackupView.vue')
 
 const routes = [
   { path: '/', component: DashboardView, meta: { title: '库存总览', subtitle: '查看当前库存与近期业务情况' } },
