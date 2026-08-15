@@ -26,6 +26,21 @@ export interface LedgerRow {
   remark: string | null
 }
 
+export interface InventoryFilters {
+  keyword?: string
+  unit?: string
+  location?: string
+}
+
+export interface LedgerFilters {
+  material?: string
+  type?: string
+  relatedUnit?: string
+  destination?: string
+  startAt?: string
+  endAt?: string
+}
+
 export interface StockOperationInput {
   materialId: number
   locationId: number
@@ -111,8 +126,11 @@ export async function stockOut(input: StockOperationInput) {
   })
 }
 
-export async function listInventory(keyword = ''): Promise<InventoryRow[]> {
-  const q = `%${keyword.trim()}%`
+export async function listInventory(filters: InventoryFilters | string = {}): Promise<InventoryRow[]> {
+  const normalized: InventoryFilters = typeof filters === 'string' ? { keyword: filters } : filters
+  const keyword = `%${(normalized.keyword ?? '').trim()}%`
+  const unit = `%${(normalized.unit ?? '').trim()}%`
+  const location = `%${(normalized.location ?? '').trim()}%`
   return (await getDatabase()).select<InventoryRow[]>(`
     SELECT b.material_id, m.name AS material_name, u.name AS unit_name,
            b.location_id, l.name AS location_name, b.quantity, b.updated_at
@@ -120,12 +138,16 @@ export async function listInventory(keyword = ''): Promise<InventoryRow[]> {
     JOIN materials m ON m.id=b.material_id
     LEFT JOIN units u ON u.id=m.unit_id
     JOIN locations l ON l.id=b.location_id
-    WHERE b.quantity <> 0 AND ($1='%%' OR m.name LIKE $1 OR l.name LIKE $1)
-    ORDER BY m.name, l.name`, [q])
+    WHERE b.quantity <> 0
+      AND ($1='%%' OR m.name LIKE $1)
+      AND ($2='%%' OR COALESCE(u.name,'') LIKE $2)
+      AND ($3='%%' OR l.name LIKE $3)
+    ORDER BY m.name, l.name`, [keyword, unit, location])
 }
 
-export async function listLedger(filters: { keyword?: string; type?: string; destination?: string } = {}): Promise<LedgerRow[]> {
-  const keyword = `%${(filters.keyword ?? '').trim()}%`
+export async function listLedger(filters: LedgerFilters = {}): Promise<LedgerRow[]> {
+  const material = `%${(filters.material ?? '').trim()}%`
+  const relatedUnit = `%${(filters.relatedUnit ?? '').trim()}%`
   const destination = `%${(filters.destination ?? '').trim()}%`
   return (await getDatabase()).select<LedgerRow[]>(`
     SELECT t.id,t.transaction_no,t.type,m.name AS material_name,u.name AS unit_name,
@@ -135,8 +157,18 @@ export async function listLedger(filters: { keyword?: string; type?: string; des
     JOIN materials m ON m.id=t.material_id
     LEFT JOIN units u ON u.id=m.unit_id
     JOIN locations l ON l.id=t.location_id
-    WHERE ($1='%%' OR m.name LIKE $1 OR COALESCE(t.related_unit,'') LIKE $1)
+    WHERE ($1='%%' OR m.name LIKE $1)
       AND ($2='' OR t.type=$2)
-      AND ($3='%%' OR COALESCE(t.destination,'') LIKE $3)
-    ORDER BY t.occurred_at DESC,t.id DESC`, [keyword, filters.type ?? '', destination])
+      AND ($3='%%' OR COALESCE(t.related_unit,'') LIKE $3)
+      AND ($4='%%' OR COALESCE(t.destination,'') LIKE $4)
+      AND ($5='' OR t.occurred_at >= $5)
+      AND ($6='' OR t.occurred_at <= $6)
+    ORDER BY t.occurred_at DESC,t.id DESC`, [
+      material,
+      filters.type ?? '',
+      relatedUnit,
+      destination,
+      filters.startAt ?? '',
+      filters.endAt ?? '',
+    ])
 }
