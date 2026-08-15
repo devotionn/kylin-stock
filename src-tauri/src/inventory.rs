@@ -36,16 +36,20 @@ async fn open_connection(app: &AppHandle) -> Result<SqliteConnection, String> {
         .await
         .map_err(|e| format!("无法连接业务数据库：{e}"))?;
 
+    configure_connection(&mut connection).await?;
+    Ok(connection)
+}
+
+async fn configure_connection(connection: &mut SqliteConnection) -> Result<(), String> {
     sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&mut connection)
+        .execute(&mut *connection)
         .await
         .map_err(|e| format!("无法启用数据库外键约束：{e}"))?;
     sqlx::query("PRAGMA busy_timeout = 5000")
-        .execute(&mut connection)
+        .execute(&mut *connection)
         .await
         .map_err(|e| format!("无法设置数据库等待策略：{e}"))?;
-
-    Ok(connection)
+    Ok(())
 }
 
 fn validate(input: &StockOperationInput) -> Result<(), String> {
@@ -96,11 +100,12 @@ async fn commit(connection: &mut SqliteConnection) -> Result<(), String> {
         .map_err(|e| format!("库存事务提交失败：{e}"))
 }
 
-#[tauri::command]
-pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<String, String> {
-    validate(&input)?;
-    let mut connection = open_connection(&app).await?;
-    begin_immediate(&mut connection).await?;
+async fn stock_in_on_connection(
+    connection: &mut SqliteConnection,
+    input: &StockOperationInput,
+) -> Result<String, String> {
+    validate(input)?;
+    begin_immediate(connection).await?;
 
     let transaction_no = transaction_no("IN");
     let result: Result<(), String> = async {
@@ -118,7 +123,7 @@ pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<Stri
         .bind(clean(&input.handler))
         .bind(clean(&input.receiver))
         .bind(clean(&input.remark))
-        .execute(&mut connection)
+        .execute(&mut *connection)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -132,7 +137,7 @@ pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<Stri
         .bind(input.material_id)
         .bind(input.location_id)
         .bind(input.quantity)
-        .execute(&mut connection)
+        .execute(&mut *connection)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -141,42 +146,44 @@ pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<Stri
     .await;
 
     if let Err(error) = result {
-        rollback(&mut connection).await;
+        rollback(connection).await;
         return Err(format!("入库登记失败：{error}"));
     }
-    if let Err(error) = commit(&mut connection).await {
-        rollback(&mut connection).await;
+    if let Err(error) = commit(connection).await {
+        rollback(connection).await;
         return Err(error);
     }
 
     Ok(transaction_no)
 }
 
-#[tauri::command]
-pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<String, String> {
-    validate(&input)?;
+async fn stock_out_on_connection(
+    connection: &mut SqliteConnection,
+    input: &StockOperationInput,
+) -> Result<String, String> {
+    validate(input)?;
     let destination = clean(&input.destination).ok_or_else(|| "出库去向不能为空".to_string())?;
+    begin_immediate(connection).await?;
 
-    let mut connection = open_connection(&app).await?;
-    begin_immediate(&mut connection).await?;
-
+    // SQLite NUMERIC affinity may physically store whole values as INTEGER even
+    // when they were bound from f64. Cast explicitly so SQLx always decodes REAL.
     let available = match sqlx::query_scalar::<_, f64>(
-        "SELECT quantity FROM inventory_balances WHERE material_id=? AND location_id=?",
+        "SELECT CAST(quantity AS REAL) FROM inventory_balances WHERE material_id=? AND location_id=?",
     )
     .bind(input.material_id)
     .bind(input.location_id)
-    .fetch_optional(&mut connection)
+    .fetch_optional(&mut *connection)
     .await
     {
         Ok(value) => value.unwrap_or(0.0),
         Err(error) => {
-            rollback(&mut connection).await;
+            rollback(connection).await;
             return Err(format!("读取当前库存失败：{error}"));
         }
     };
 
     if available + f64::EPSILON < input.quantity {
-        rollback(&mut connection).await;
+        rollback(connection).await;
         return Err(format!("库存不足，当前可用库存为 {available}"));
     }
 
@@ -197,7 +204,7 @@ pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<Str
         .bind(clean(&input.handler))
         .bind(clean(&input.receiver))
         .bind(clean(&input.remark))
-        .execute(&mut connection)
+        .execute(&mut *connection)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -210,7 +217,7 @@ pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<Str
         .bind(input.material_id)
         .bind(input.location_id)
         .bind(input.quantity)
-        .execute(&mut connection)
+        .execute(&mut *connection)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -223,13 +230,180 @@ pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<Str
     .await;
 
     if let Err(error) = result {
-        rollback(&mut connection).await;
+        rollback(connection).await;
         return Err(format!("出库登记失败：{error}"));
     }
-    if let Err(error) = commit(&mut connection).await {
-        rollback(&mut connection).await;
+    if let Err(error) = commit(connection).await {
+        rollback(connection).await;
         return Err(error);
     }
 
     Ok(transaction_no)
+}
+
+#[tauri::command]
+pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<String, String> {
+    let mut connection = open_connection(&app).await?;
+    stock_in_on_connection(&mut connection, &input).await
+}
+
+#[tauri::command]
+pub async fn stock_out(app: AppHandle, input: StockOperationInput) -> Result<String, String> {
+    let mut connection = open_connection(&app).await?;
+    stock_out_on_connection(&mut connection, &input).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_connection() -> SqliteConnection {
+        let mut connection = SqliteConnection::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        configure_connection(&mut connection)
+            .await
+            .expect("configure sqlite");
+
+        sqlx::query(
+            r#"CREATE TABLE inventory_balances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                quantity NUMERIC NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(material_id, location_id)
+            )"#,
+        )
+        .execute(&mut connection)
+        .await
+        .expect("create inventory_balances");
+
+        sqlx::query(
+            r#"CREATE TABLE stock_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_no TEXT NOT NULL UNIQUE,
+                type TEXT NOT NULL CHECK(type IN ('IN','OUT','ADJUST')),
+                material_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                quantity NUMERIC NOT NULL CHECK(quantity > 0),
+                occurred_at TEXT NOT NULL,
+                related_unit TEXT,
+                destination TEXT,
+                handler TEXT,
+                receiver TEXT,
+                remark TEXT,
+                created_at TEXT NOT NULL
+            )"#,
+        )
+        .execute(&mut connection)
+        .await
+        .expect("create stock_transactions");
+
+        connection
+    }
+
+    fn input(quantity: f64) -> StockOperationInput {
+        StockOperationInput {
+            material_id: 1,
+            location_id: 1,
+            quantity,
+            occurred_at: "2026-08-16T00:00:00.000Z".into(),
+            related_unit: Some("测试单位".into()),
+            destination: None,
+            handler: Some("测试经办人".into()),
+            receiver: None,
+            remark: Some("自动化测试".into()),
+        }
+    }
+
+    async fn balance(connection: &mut SqliteConnection) -> f64 {
+        sqlx::query_scalar::<_, f64>(
+            "SELECT CAST(COALESCE(quantity,0) AS REAL) FROM inventory_balances WHERE material_id=1 AND location_id=1",
+        )
+        .fetch_optional(connection)
+        .await
+        .expect("read balance")
+        .unwrap_or(0.0)
+    }
+
+    async fn transaction_count(connection: &mut SqliteConnection, kind: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stock_transactions WHERE type=?")
+            .bind(kind)
+            .fetch_one(connection)
+            .await
+            .expect("count transactions")
+    }
+
+    #[tokio::test]
+    async fn stock_in_creates_ledger_and_balance_atomically() {
+        let mut connection = test_connection().await;
+        let tx = stock_in_on_connection(&mut connection, &input(10.0))
+            .await
+            .expect("stock in succeeds");
+
+        assert!(tx.starts_with("IN-"));
+        assert_eq!(balance(&mut connection).await, 10.0);
+        assert_eq!(transaction_count(&mut connection, "IN").await, 1);
+    }
+
+    #[tokio::test]
+    async fn stock_out_decrements_balance_and_records_destination() {
+        let mut connection = test_connection().await;
+        stock_in_on_connection(&mut connection, &input(10.0))
+            .await
+            .expect("seed stock");
+
+        let mut outbound = input(3.0);
+        outbound.destination = Some("一车间".into());
+        outbound.receiver = Some("张三".into());
+        let tx = stock_out_on_connection(&mut connection, &outbound)
+            .await
+            .expect("stock out succeeds");
+
+        assert!(tx.starts_with("OUT-"));
+        assert_eq!(balance(&mut connection).await, 7.0);
+        assert_eq!(transaction_count(&mut connection, "OUT").await, 1);
+        let destination = sqlx::query_scalar::<_, String>(
+            "SELECT destination FROM stock_transactions WHERE type='OUT' LIMIT 1",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .expect("read destination");
+        assert_eq!(destination, "一车间");
+    }
+
+    #[tokio::test]
+    async fn insufficient_stock_leaves_balance_and_ledger_unchanged() {
+        let mut connection = test_connection().await;
+        stock_in_on_connection(&mut connection, &input(5.0))
+            .await
+            .expect("seed stock");
+
+        let mut outbound = input(6.0);
+        outbound.destination = Some("XX项目".into());
+        let error = stock_out_on_connection(&mut connection, &outbound)
+            .await
+            .expect_err("insufficient stock must fail");
+
+        assert!(error.contains("库存不足"));
+        assert_eq!(balance(&mut connection).await, 5.0);
+        assert_eq!(transaction_count(&mut connection, "OUT").await, 0);
+    }
+
+    #[tokio::test]
+    async fn outbound_without_destination_is_rejected_before_mutation() {
+        let mut connection = test_connection().await;
+        stock_in_on_connection(&mut connection, &input(5.0))
+            .await
+            .expect("seed stock");
+
+        let error = stock_out_on_connection(&mut connection, &input(1.0))
+            .await
+            .expect_err("missing destination must fail");
+
+        assert!(error.contains("出库去向不能为空"));
+        assert_eq!(balance(&mut connection).await, 5.0);
+        assert_eq!(transaction_count(&mut connection, "OUT").await, 0);
+    }
 }
