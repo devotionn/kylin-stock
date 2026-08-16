@@ -3,6 +3,7 @@ import Database from '@tauri-apps/plugin-sql'
 
 let database: Database | null = null
 let initialization: Promise<Database> | null = null
+let mutationTail: Promise<void> = Promise.resolve()
 
 export async function initializeDatabase() {
   if (database) return database
@@ -34,6 +35,34 @@ export async function initializeDatabase() {
 
 export async function getDatabase() {
   return database ?? initializeDatabase()
+}
+
+/**
+ * Serialize application-level database mutations within the single KylinStock
+ * webview process. This is intentionally a service-layer invariant rather than
+ * only a button/loading guard: callers that forget to disable a UI control are
+ * still queued behind the mutation already in progress.
+ *
+ * Backup/restore also owns this queue for its complete database lifecycle so a
+ * stock or master-data write cannot overlap snapshot/close/swap/reopen work.
+ * Reads remain concurrent; KylinStock V1 has no background polling and restore
+ * is only exposed from the dedicated backup view.
+ *
+ * Do not call withDatabaseMutation() recursively from inside an operation that
+ * already owns the queue; nested acquisition would wait on itself.
+ */
+export async function withDatabaseMutation<T>(operation: () => Promise<T>): Promise<T> {
+  let release!: () => void
+  const turn = new Promise<void>((resolve) => { release = resolve })
+  const previous = mutationTail
+  mutationTail = turn
+
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+  }
 }
 
 export async function closeDatabase() {

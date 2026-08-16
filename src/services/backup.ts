@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { checkDatabaseIntegrity, closeDatabase, getDatabase, reopenDatabase } from './database'
+import { checkDatabaseIntegrity, closeDatabase, getDatabase, reopenDatabase, withDatabaseMutation } from './database'
 
 export type BackupType = 'MANUAL' | 'ANNUAL'
 
@@ -72,7 +72,8 @@ async function rollbackFailedRestore(
   originalError: unknown,
 ): Promise<never> {
   // A failed restored database may be impossible to reopen, so rollback must
-  // happen while the SQL pool remains closed.
+  // happen while the SQL pool remains closed. The caller already owns the
+  // global database mutation queue for the complete restore lifecycle.
   try {
     await closeDatabase()
   } catch (closeError) {
@@ -146,19 +147,21 @@ export async function createBackup(type: BackupType, year?: number) {
   })
   if (!destination) return null
 
-  // Rust uses SQLite VACUUM INTO to produce a transactional snapshot of the
-  // live database. The frontend SQL pool stays open; no raw .db copy is used
-  // for user-created backups.
-  const result = await invoke<NativeBackupResult>('create_database_backup', { destination })
+  return withDatabaseMutation(async () => {
+    // Rust uses SQLite VACUUM INTO to produce a transactional snapshot. Holding
+    // the application mutation turn additionally prevents a stock/master-data
+    // write or restore lifecycle from overlapping this user-requested backup.
+    const result = await invoke<NativeBackupResult>('create_database_backup', { destination })
 
-  await recordBackup({
-    path: destination,
-    type,
-    year: type === 'ANNUAL' ? year : null,
-    size: result.fileSize,
-    remark: type === 'ANNUAL' ? `${year} 年度归档备份` : '用户手动创建的即时备份',
+    await recordBackup({
+      path: destination,
+      type,
+      year: type === 'ANNUAL' ? year : null,
+      size: result.fileSize,
+      remark: type === 'ANNUAL' ? `${year} 年度归档备份` : '用户手动创建的即时备份',
+    })
+    return destination
   })
-  return destination
 }
 
 export async function chooseRestoreFile() {
@@ -172,58 +175,61 @@ export async function chooseRestoreFile() {
 }
 
 export async function restoreBackup(source: string) {
-  // Restore has a stricter lifecycle than backup creation. The current pool is
-  // deliberately closed because the live database file will be replaced.
-  await closeDatabase()
+  return withDatabaseMutation(async () => {
+    // The mutation turn is held from pool close through swap, reopen,
+    // integrity_check and any automatic rollback. No stock/master-data write
+    // can overlap replacement of the live SQLite database.
+    await closeDatabase()
 
-  let result: NativeRestoreResult
-  try {
-    result = await invoke<NativeRestoreResult>('restore_database_backup', { source })
-  } catch (restoreError) {
+    let result: NativeRestoreResult
+    try {
+      result = await invoke<NativeRestoreResult>('restore_database_backup', { source })
+    } catch (restoreError) {
+      try {
+        await reopenDatabase()
+      } catch (reopenError) {
+        throw new Error(
+          `备份文件未完成恢复（${errorText(restoreError)}），随后原业务数据库也无法重新打开：${errorText(reopenError)}`,
+        )
+      }
+      throw restoreError
+    }
+
     try {
       await reopenDatabase()
     } catch (reopenError) {
+      if (result.safetyBackupPath) {
+        return rollbackFailedRestore(result.safetyBackupPath, result.safetyBackupSize, reopenError)
+      }
       throw new Error(
-        `备份文件未完成恢复（${errorText(restoreError)}），随后原业务数据库也无法重新打开：${errorText(reopenError)}`,
+        `恢复文件已替换数据库，但数据库无法重新打开：${errorText(reopenError)}。本次操作前不存在可自动回滚的数据库副本，请停止继续操作。`,
       )
     }
-    throw restoreError
-  }
 
-  try {
-    await reopenDatabase()
-  } catch (reopenError) {
-    if (result.safetyBackupPath) {
-      return rollbackFailedRestore(result.safetyBackupPath, result.safetyBackupSize, reopenError)
+    let integrityError: unknown = null
+    try {
+      const healthy = await checkDatabaseIntegrity()
+      if (!healthy) integrityError = new Error('所选备份未通过 integrity_check')
+    } catch (error) {
+      integrityError = error
     }
-    throw new Error(
-      `恢复文件已替换数据库，但数据库无法重新打开：${errorText(reopenError)}。本次操作前不存在可自动回滚的数据库副本，请停止继续操作。`,
-    )
-  }
 
-  let integrityError: unknown = null
-  try {
-    const healthy = await checkDatabaseIntegrity()
-    if (!healthy) integrityError = new Error('所选备份未通过 integrity_check')
-  } catch (error) {
-    integrityError = error
-  }
-
-  if (integrityError) {
-    if (result.safetyBackupPath) {
-      return rollbackFailedRestore(result.safetyBackupPath, result.safetyBackupSize, integrityError)
+    if (integrityError) {
+      if (result.safetyBackupPath) {
+        return rollbackFailedRestore(result.safetyBackupPath, result.safetyBackupSize, integrityError)
+      }
+      throw new Error(`恢复后的数据库完整性检查失败：${errorText(integrityError)}`)
     }
-    throw new Error(`恢复后的数据库完整性检查失败：${errorText(integrityError)}`)
-  }
 
-  if (result.safetyBackupPath) {
-    await recordBackup({
-      path: result.safetyBackupPath,
-      type: 'MANUAL',
-      size: result.safetyBackupSize,
-      remark: '执行数据恢复前自动创建的安全副本',
-    })
-  }
+    if (result.safetyBackupPath) {
+      await recordBackup({
+        path: result.safetyBackupPath,
+        type: 'MANUAL',
+        size: result.safetyBackupSize,
+        remark: '执行数据恢复前自动创建的安全副本',
+      })
+    }
 
-  return result
+    return result
+  })
 }

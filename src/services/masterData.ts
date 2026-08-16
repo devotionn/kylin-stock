@@ -1,4 +1,4 @@
-import { getDatabase } from './database'
+import { getDatabase, withDatabaseMutation } from './database'
 
 export interface Unit { id: number; name: string; status: number }
 export interface Location { id: number; name: string; remark: string | null; status: number }
@@ -25,7 +25,9 @@ export async function listUnits(): Promise<Unit[]> {
 export async function createUnit(name: string) {
   const value = name.trim()
   if (!value) throw new Error('单位名称不能为空')
-  return (await getDatabase()).execute('INSERT INTO units(name, status) VALUES ($1, 1)', [value])
+  return withDatabaseMutation(async () =>
+    (await getDatabase()).execute('INSERT INTO units(name, status) VALUES ($1, 1)', [value]),
+  )
 }
 
 export async function listLocations(): Promise<Location[]> {
@@ -34,8 +36,11 @@ export async function listLocations(): Promise<Location[]> {
 
 export async function createLocation(name: string, remark = '') {
   const value = name.trim()
+  const normalizedRemark = remark.trim() || null
   if (!value) throw new Error('存放位置不能为空')
-  return (await getDatabase()).execute('INSERT INTO locations(name, remark, status) VALUES ($1, $2, 1)', [value, remark.trim() || null])
+  return withDatabaseMutation(async () =>
+    (await getDatabase()).execute('INSERT INTO locations(name, remark, status) VALUES ($1, $2, 1)', [value, normalizedRemark]),
+  )
 }
 
 export async function listMaterials(keyword = ''): Promise<Material[]> {
@@ -60,43 +65,57 @@ export async function saveMaterial(input: {
   locationId?: number | null
   remark?: string
 }) {
-  const db = await getDatabase()
-  const name = input.name.trim()
-  if (!name) throw new Error('物资名称不能为空')
-
-  // V1 intentionally has no user-visible product/SKU code. Therefore the
-  // material name is the human-facing identity and duplicate names would make
-  // stock-in/out selections ambiguous. Reject duplicates, including disabled
-  // historical records; users can re-enable the existing material instead.
-  const conflicts = await db.select<{ id: number; status: number }[]>(`
-    SELECT id, status
-    FROM materials
-    WHERE name = $1 COLLATE NOCASE
-      AND ($2 IS NULL OR id <> $2)
-    LIMIT 1
-  `, [name, input.id ?? null])
-  if (conflicts.length) {
-    throw new Error(conflicts[0].status === 0
-      ? '已存在同名物资，但当前处于停用状态，请直接重新启用原物资'
-      : '已存在同名物资，请勿重复添加')
+  const normalized = {
+    id: input.id,
+    name: input.name.trim(),
+    unitId: input.unitId ?? null,
+    category: input.category?.trim() || null,
+    locationId: input.locationId ?? null,
+    remark: input.remark?.trim() || null,
   }
+  if (!normalized.name) throw new Error('物资名称不能为空')
 
-  const timestamp = now()
-  if (input.id) {
-    return db.execute(`UPDATE materials SET name=$1, unit_id=$2, category=$3,
-      default_location_id=$4, remark=$5, updated_at=$6 WHERE id=$7`, [
-      name, input.unitId ?? null, input.category?.trim() || null,
-      input.locationId ?? null, input.remark?.trim() || null, timestamp, input.id,
+  return withDatabaseMutation(async () => {
+    const db = await getDatabase()
+
+    // V1 intentionally has no user-visible product/SKU code. Therefore the
+    // material name is the human-facing identity. Keep duplicate detection and
+    // the following INSERT/UPDATE in the same application mutation turn so two
+    // callers cannot both pass the precheck concurrently.
+    const conflicts = await db.select<{ id: number; status: number }[]>(`
+      SELECT id, status
+      FROM materials
+      WHERE name = $1 COLLATE NOCASE
+        AND ($2 IS NULL OR id <> $2)
+      LIMIT 1
+    `, [normalized.name, normalized.id ?? null])
+    if (conflicts.length) {
+      throw new Error(conflicts[0].status === 0
+        ? '已存在同名物资，但当前处于停用状态，请直接重新启用原物资'
+        : '已存在同名物资，请勿重复添加')
+    }
+
+    const timestamp = now()
+    if (normalized.id) {
+      return db.execute(`UPDATE materials SET name=$1, unit_id=$2, category=$3,
+        default_location_id=$4, remark=$5, updated_at=$6 WHERE id=$7`, [
+        normalized.name, normalized.unitId, normalized.category,
+        normalized.locationId, normalized.remark, timestamp, normalized.id,
+      ])
+    }
+    return db.execute(`INSERT INTO materials
+      (name, unit_id, category, default_location_id, remark, status, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,1,$6,$6)`, [
+      normalized.name, normalized.unitId, normalized.category,
+      normalized.locationId, normalized.remark, timestamp,
     ])
-  }
-  return db.execute(`INSERT INTO materials
-    (name, unit_id, category, default_location_id, remark, status, created_at, updated_at)
-    VALUES ($1,$2,$3,$4,$5,1,$6,$6)`, [
-    name, input.unitId ?? null, input.category?.trim() || null,
-    input.locationId ?? null, input.remark?.trim() || null, timestamp,
-  ])
+  })
 }
 
 export async function setMaterialStatus(id: number, status: 0 | 1) {
-  return (await getDatabase()).execute('UPDATE materials SET status=$1, updated_at=$2 WHERE id=$3', [status, now(), id])
+  const materialId = Number(id)
+  const nextStatus = status
+  return withDatabaseMutation(async () =>
+    (await getDatabase()).execute('UPDATE materials SET status=$1, updated_at=$2 WHERE id=$3', [nextStatus, now(), materialId]),
+  )
 }
