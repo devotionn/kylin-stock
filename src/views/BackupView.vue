@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { chooseRestoreFile, createBackup, listBackupRecords, restoreBackup, type BackupRecord } from '../services/backup'
 import { formatDateTime } from '../utils/date'
@@ -7,6 +7,7 @@ import { formatDateTime } from '../utils/date'
 const loading = ref(false)
 const backingUp = ref(false)
 const restoring = ref(false)
+const operationBusy = computed(() => backingUp.value || restoring.value)
 const year = ref(new Date().getFullYear())
 const rows = ref<BackupRecord[]>([])
 
@@ -18,6 +19,7 @@ function formatSize(bytes: number | null) {
 }
 
 async function refresh() {
+  if (operationBusy.value) return
   loading.value = true
   try { rows.value = await listBackupRecords() }
   catch (e) { ElMessage.error(e instanceof Error ? e.message : String(e)) }
@@ -25,12 +27,15 @@ async function refresh() {
 }
 
 async function runBackup(type: 'MANUAL' | 'ANNUAL') {
+  if (operationBusy.value) return
   backingUp.value = true
   try {
     const path = await createBackup(type, type === 'ANNUAL' ? year.value : undefined)
     if (path) {
       ElMessage.success(type === 'ANNUAL' ? '年度备份创建成功' : '数据备份创建成功')
-      await refresh()
+      // The operation lock remains active until finally. Refresh directly here
+      // instead of calling refresh(), which intentionally rejects concurrent work.
+      rows.value = await listBackupRecords()
     }
   } catch (e) {
     ElMessage.error(`备份失败：${e instanceof Error ? e.message : String(e)}`)
@@ -40,32 +45,33 @@ async function runBackup(type: 'MANUAL' | 'ANNUAL') {
 }
 
 async function runRestore() {
-  const source = await chooseRestoreFile()
-  if (!source) return
-
-  try {
-    await ElMessageBox.confirm(
-      '恢复操作会使用所选备份替换当前业务数据。系统会先自动保留一份恢复前安全副本。确认继续吗？',
-      '确认恢复数据',
-      {
-        type: 'warning',
-        confirmButtonText: '确认恢复',
-        cancelButtonText: '取消',
-        distinguishCancelAndClose: true,
-      },
-    )
-  } catch {
-    return
-  }
-
+  if (operationBusy.value) return
   restoring.value = true
   try {
+    const source = await chooseRestoreFile()
+    if (!source) return
+
+    try {
+      await ElMessageBox.confirm(
+        '恢复操作会使用所选备份替换当前业务数据。系统会先自动保留一份恢复前安全副本。确认继续吗？',
+        '确认恢复数据',
+        {
+          type: 'warning',
+          confirmButtonText: '确认恢复',
+          cancelButtonText: '取消',
+          distinguishCancelAndClose: true,
+        },
+      )
+    } catch {
+      return
+    }
+
     const result = await restoreBackup(source)
     ElMessage.success('数据恢复完成，数据库完整性检查通过')
     if (result.safetyBackupPath) {
       ElMessage.info('恢复前数据已自动保存为安全副本')
     }
-    await refresh()
+    rows.value = await listBackupRecords()
   } catch (e) {
     ElMessage.error(`恢复失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
@@ -91,22 +97,22 @@ onMounted(refresh)
         <div class="action-block">
           <div class="action-title">即时备份</div>
           <div class="action-desc">适合日常操作前、重要数据录入后随时创建。</div>
-          <el-button type="primary" :loading="backingUp" @click="runBackup('MANUAL')">创建即时备份</el-button>
+          <el-button type="primary" :loading="backingUp" :disabled="operationBusy" @click="runBackup('MANUAL')">创建即时备份</el-button>
         </div>
 
         <div class="action-block">
           <div class="action-title">年度归档</div>
           <div class="action-desc">为指定年度创建明确标记的归档副本。</div>
           <div class="annual-row">
-            <el-input-number v-model="year" :min="2000" :max="2100" :step="1" :controls="false" style="width:120px" />
-            <el-button type="success" :loading="backingUp" @click="runBackup('ANNUAL')">创建年度备份</el-button>
+            <el-input-number v-model="year" :min="2000" :max="2100" :step="1" :controls="false" :disabled="operationBusy" style="width:120px" />
+            <el-button type="success" :loading="backingUp" :disabled="operationBusy" @click="runBackup('ANNUAL')">创建年度备份</el-button>
           </div>
         </div>
 
         <div class="action-block danger-block">
           <div class="action-title">从备份恢复</div>
           <div class="action-desc">选择 `.db` 备份恢复。恢复前会自动创建当前数据的安全副本。</div>
-          <el-button type="danger" :loading="restoring" @click="runRestore">选择备份并恢复</el-button>
+          <el-button type="danger" :loading="restoring" :disabled="operationBusy" @click="runRestore">选择备份并恢复</el-button>
         </div>
       </div>
     </el-card>
@@ -115,7 +121,7 @@ onMounted(refresh)
       <template #header>
         <div class="history-header">
           <strong>备份记录</strong>
-          <el-button @click="refresh">刷新</el-button>
+          <el-button :disabled="operationBusy" @click="refresh">刷新</el-button>
         </div>
       </template>
       <el-table v-loading="loading" :data="rows" border stripe empty-text="暂无备份记录">
