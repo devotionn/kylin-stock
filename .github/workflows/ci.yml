@@ -22,6 +22,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,14 +41,14 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Install frontend dependencies
-        run: npm install
+      - name: Install locked frontend dependencies
+        run: npm ci --no-audit --no-fund
 
       - name: TypeScript and Vite build
         run: npm run build
 
-      - name: Rust compile check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Rust compile check with locked dependencies
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
   arm64-package-smoke:
     runs-on: ubuntu-22.04-arm
@@ -66,6 +67,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -84,8 +86,11 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Install frontend dependencies
-        run: npm install
+      - name: Install locked frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify locked Rust dependency graph
+        run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --no-deps > /dev/null
 
       - name: Build native ARM64 deb smoke package
         run: npm run tauri:build -- --bundles deb
