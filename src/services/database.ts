@@ -3,7 +3,7 @@ import Database from '@tauri-apps/plugin-sql'
 
 let database: Database | null = null
 let initialization: Promise<Database> | null = null
-let mutationTail: Promise<void> = Promise.resolve()
+let accessTail: Promise<void> = Promise.resolve()
 
 export async function initializeDatabase() {
   if (database) return database
@@ -38,24 +38,24 @@ export async function getDatabase() {
 }
 
 /**
- * Serialize application-level database mutations within the single KylinStock
- * webview process. This is intentionally a service-layer invariant rather than
- * only a button/loading guard: callers that forget to disable a UI control are
- * still queued behind the mutation already in progress.
+ * Serialize application-level SQLite access within the single KylinStock
+ * webview process. The workload is a single-user desktop application, so the
+ * negligible serialization cost is preferable to allowing a query to race a
+ * restore that closes and replaces the live database file.
  *
- * Backup/restore also owns this queue for its complete database lifecycle so a
- * stock or master-data write cannot overlap snapshot/close/swap/reopen work.
- * Reads remain concurrent; KylinStock V1 has no background polling and restore
- * is only exposed from the dedicated backup view.
+ * A caller may execute several SQL statements (including Promise.all reads)
+ * while it owns one access turn. Stock/master-data writes, user backups and the
+ * complete restore close/swap/reopen/rollback lifecycle use this same gate.
  *
- * Do not call withDatabaseMutation() recursively from inside an operation that
- * already owns the queue; nested acquisition would wait on itself.
+ * Do not acquire this gate recursively from inside an operation that already
+ * owns it; nested acquisition would wait on itself. Internal helpers used by an
+ * owning operation should call getDatabase() directly.
  */
-export async function withDatabaseMutation<T>(operation: () => Promise<T>): Promise<T> {
+export async function withDatabaseAccess<T>(operation: () => Promise<T>): Promise<T> {
   let release!: () => void
   const turn = new Promise<void>((resolve) => { release = resolve })
-  const previous = mutationTail
-  mutationTail = turn
+  const previous = accessTail
+  accessTail = turn
 
   await previous
   try {
@@ -63,6 +63,10 @@ export async function withDatabaseMutation<T>(operation: () => Promise<T>): Prom
   } finally {
     release()
   }
+}
+
+export function withDatabaseMutation<T>(operation: () => Promise<T>): Promise<T> {
+  return withDatabaseAccess(operation)
 }
 
 export async function closeDatabase() {

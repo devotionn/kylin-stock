@@ -1,4 +1,4 @@
-import { getDatabase, withDatabaseMutation } from './database'
+import { getDatabase, withDatabaseAccess, withDatabaseMutation } from './database'
 
 export interface Unit { id: number; name: string; status: number }
 export interface Location { id: number; name: string; remark: string | null; status: number }
@@ -19,7 +19,9 @@ export interface Material {
 const now = () => new Date().toISOString()
 
 export async function listUnits(): Promise<Unit[]> {
-  return (await getDatabase()).select<Unit[]>('SELECT id, name, status FROM units WHERE status = 1 ORDER BY name')
+  return withDatabaseAccess(async () =>
+    (await getDatabase()).select<Unit[]>('SELECT id, name, status FROM units WHERE status = 1 ORDER BY name'),
+  )
 }
 
 export async function createUnit(name: string) {
@@ -31,7 +33,9 @@ export async function createUnit(name: string) {
 }
 
 export async function listLocations(): Promise<Location[]> {
-  return (await getDatabase()).select<Location[]>('SELECT id, name, remark, status FROM locations WHERE status = 1 ORDER BY name')
+  return withDatabaseAccess(async () =>
+    (await getDatabase()).select<Location[]>('SELECT id, name, remark, status FROM locations WHERE status = 1 ORDER BY name'),
+  )
 }
 
 export async function createLocation(name: string, remark = '') {
@@ -45,16 +49,18 @@ export async function createLocation(name: string, remark = '') {
 
 export async function listMaterials(keyword = ''): Promise<Material[]> {
   const q = `%${keyword.trim()}%`
-  return (await getDatabase()).select<Material[]>(`
-    SELECT m.id, m.name, m.unit_id, u.name AS unit_name, m.category,
-           m.default_location_id, l.name AS location_name, m.remark,
-           m.status, m.created_at, m.updated_at
-    FROM materials m
-    LEFT JOIN units u ON u.id = m.unit_id
-    LEFT JOIN locations l ON l.id = m.default_location_id
-    WHERE ($1 = '%%' OR m.name LIKE $1 OR COALESCE(m.category, '') LIKE $1)
-    ORDER BY m.status DESC, m.name
-  `, [q])
+  return withDatabaseAccess(async () =>
+    (await getDatabase()).select<Material[]>(`
+      SELECT m.id, m.name, m.unit_id, u.name AS unit_name, m.category,
+             m.default_location_id, l.name AS location_name, m.remark,
+             m.status, m.created_at, m.updated_at
+      FROM materials m
+      LEFT JOIN units u ON u.id = m.unit_id
+      LEFT JOIN locations l ON l.id = m.default_location_id
+      WHERE ($1 = '%%' OR m.name LIKE $1 OR COALESCE(m.category, '') LIKE $1)
+      ORDER BY m.status DESC, m.name
+    `, [q]),
+  )
 }
 
 export async function saveMaterial(input: {

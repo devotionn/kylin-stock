@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import { checkDatabaseIntegrity, closeDatabase, getDatabase, reopenDatabase, withDatabaseMutation } from './database'
+import { checkDatabaseIntegrity, closeDatabase, getDatabase, reopenDatabase, withDatabaseAccess, withDatabaseMutation } from './database'
 
 export type BackupType = 'MANUAL' | 'ANNUAL'
 
@@ -73,7 +73,7 @@ async function rollbackFailedRestore(
 ): Promise<never> {
   // A failed restored database may be impossible to reopen, so rollback must
   // happen while the SQL pool remains closed. The caller already owns the
-  // global database mutation queue for the complete restore lifecycle.
+  // global database access queue for the complete restore lifecycle.
   try {
     await closeDatabase()
   } catch (closeError) {
@@ -124,11 +124,13 @@ async function rollbackFailedRestore(
 }
 
 export async function listBackupRecords(): Promise<BackupRecord[]> {
-  return (await getDatabase()).select<BackupRecord[]>(`
-    SELECT id,file_name,file_path,backup_type,backup_year,file_size,created_at,remark
-    FROM backup_records
-    ORDER BY created_at DESC,id DESC
-  `)
+  return withDatabaseAccess(async () =>
+    (await getDatabase()).select<BackupRecord[]>(`
+      SELECT id,file_name,file_path,backup_type,backup_year,file_size,created_at,remark
+      FROM backup_records
+      ORDER BY created_at DESC,id DESC
+    `),
+  )
 }
 
 export async function createBackup(type: BackupType, year?: number) {
@@ -149,8 +151,8 @@ export async function createBackup(type: BackupType, year?: number) {
 
   return withDatabaseMutation(async () => {
     // Rust uses SQLite VACUUM INTO to produce a transactional snapshot. Holding
-    // the application mutation turn additionally prevents a stock/master-data
-    // write or restore lifecycle from overlapping this user-requested backup.
+    // the application access turn additionally prevents a query, stock/master-
+    // data write or restore lifecycle from overlapping this requested backup.
     const result = await invoke<NativeBackupResult>('create_database_backup', { destination })
 
     await recordBackup({
@@ -176,9 +178,9 @@ export async function chooseRestoreFile() {
 
 export async function restoreBackup(source: string) {
   return withDatabaseMutation(async () => {
-    // The mutation turn is held from pool close through swap, reopen,
-    // integrity_check and any automatic rollback. No stock/master-data write
-    // can overlap replacement of the live SQLite database.
+    // The access turn is held from pool close through swap, reopen,
+    // integrity_check and any automatic rollback. Reads and writes that are
+    // triggered by navigation or UI events wait until the live DB is stable.
     await closeDatabase()
 
     let result: NativeRestoreResult
