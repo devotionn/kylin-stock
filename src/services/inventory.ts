@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { getDatabase } from './database'
+import { getDatabase, withDatabaseMutation } from './database'
 
 export interface InventoryRow {
   material_id: number
@@ -54,6 +54,20 @@ export interface StockOperationInput {
   remark?: string
 }
 
+function snapshotStockInput(input: StockOperationInput): StockOperationInput {
+  return {
+    materialId: Number(input.materialId),
+    locationId: Number(input.locationId),
+    quantity: Number(input.quantity),
+    occurredAt: String(input.occurredAt),
+    relatedUnit: input.relatedUnit,
+    destination: input.destination,
+    handler: input.handler,
+    receiver: input.receiver,
+    remark: input.remark,
+  }
+}
+
 function validate(input: StockOperationInput) {
   if (!input.materialId) throw new Error('请选择物资')
   if (!input.locationId) throw new Error('请选择存放位置')
@@ -62,14 +76,16 @@ function validate(input: StockOperationInput) {
 }
 
 export async function stockIn(input: StockOperationInput) {
-  validate(input)
-  return invoke<string>('stock_in', { input })
+  const payload = snapshotStockInput(input)
+  validate(payload)
+  return withDatabaseMutation(() => invoke<string>('stock_in', { input: payload }))
 }
 
 export async function stockOut(input: StockOperationInput) {
-  validate(input)
-  if (!input.destination?.trim()) throw new Error('出库去向不能为空')
-  return invoke<string>('stock_out', { input })
+  const payload = snapshotStockInput(input)
+  validate(payload)
+  if (!payload.destination?.trim()) throw new Error('出库去向不能为空')
+  return withDatabaseMutation(() => invoke<string>('stock_out', { input: payload }))
 }
 
 export async function listInventory(filters: InventoryFilters | string = {}): Promise<InventoryRow[]> {
