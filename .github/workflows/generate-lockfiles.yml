@@ -1,0 +1,48 @@
+name: Generate Dependency Lockfiles
+
+on:
+  push:
+    branches: [chore/reproducible-builds]
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lockfiles:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate npm lockfile
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Generate Cargo lockfile
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+
+      - name: Verify lockfiles exist
+        run: |
+          test -s package-lock.json
+          test -s src-tauri/Cargo.lock
+          npm ci --ignore-scripts --no-audit --no-fund
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --no-deps > /dev/null
+
+      - name: Upload resolved lockfiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: kylin-stock-resolved-lockfiles
+          path: |
+            package-lock.json
+            src-tauri/Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
