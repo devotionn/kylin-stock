@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 """Offline OCR worker for fixed-layout transfer/receiving forms.
 
-The worker intentionally returns a conservative draft. It extracts the fields
-needed by KylinStock, but never posts inventory by itself. The desktop UI is the
-human verification boundary.
+The worker returns a conservative draft only. Inventory mutation remains behind
+human review in the desktop application.
 
-For fixed grid forms the preferred path is two-stage OCR:
-1. OCR the whole page to locate semantic headers/columns.
-2. Detect horizontal table rules and OCR each material cell independently.
-
-Quantity extraction uses three safeguards: full-page numeric tokens, real table
-vertical rules, and cropped-cell OCR. The semantic “应发数 -> 数量” header picks
-the target column; nearby physical grid rules then snap its exact left/right
-cell bounds. This avoids narrow quantity cells being missed when perspective or
-OCR header geometry shifts the estimated x-range by a few pixels.
+For the fixed transfer/receiving form we intentionally prefer already-recognized
+full-page OCR tokens for structured fields. Physical grid detection is an
+auxiliary geometry signal, not a prerequisite: a photographed or screen-captured
+form may contain fragmented horizontal rules even when the text OCR is excellent.
 """
 
 from __future__ import annotations
@@ -275,6 +269,49 @@ def exact_header_near(
     return min(candidates, key=lambda token: (abs(token.cy - reference.cy), abs(token.cx - reference.cx)))
 
 
+def synthetic_quantity_token(
+    issued_header: Token,
+    actual_header: Token,
+    actual_quantity: Token | None,
+    spec_header: Token,
+) -> tuple[Token, float]:
+    """Infer the issued-quantity child when OCR only sees the mirrored actual child.
+
+    The printed form repeats the same two-child structure under 应发数 and 实发数.
+    If the left child label “数量” is missed but the right child is recognized, the
+    mirrored offset is more reliable than accidentally selecting the actual column.
+    """
+    group_gap = max(1.0, actual_header.cx - issued_header.cx)
+    if actual_quantity is not None:
+        center = issued_header.cx + (actual_quantity.cx - actual_header.cx)
+        width = max(18.0, actual_quantity.width)
+        height = max(12.0, actual_quantity.height)
+        cy = actual_quantity.cy
+        score = min(issued_header.score, actual_header.score, actual_quantity.score) * 0.92
+    else:
+        center = issued_header.cx + group_gap * 0.25
+        width = max(18.0, group_gap * 0.28)
+        height = max(12.0, spec_header.height)
+        cy = spec_header.cy
+        score = min(issued_header.score, actual_header.score) * 0.80
+    half_width = max(group_gap * 0.25, width * 0.75)
+    return (
+        Token(
+            text="数量",
+            score=score,
+            left=center - width / 2.0,
+            right=center + width / 2.0,
+            top=cy - height / 2.0,
+            bottom=cy + height / 2.0,
+            cx=center,
+            cy=cy,
+            width=width,
+            height=height,
+        ),
+        half_width,
+    )
+
+
 def table_layout(tokens: Sequence[Token], page_width: float, page_height: float) -> tuple[TableLayout | None, list[str]]:
     warnings: list[str] = []
     upper_limit = page_height * 0.62
@@ -283,6 +320,8 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
     if name_header is None or spec_header is None:
         return None, ["未可靠定位“名称/规格型号”表头，请人工核对明细。"]
 
+    header_min_y = max(0.0, spec_header.cy - page_height * 0.055)
+    header_max_y = spec_header.cy + page_height * 0.055
     serial_header = find_anchor(
         tokens,
         ["序号"],
@@ -290,12 +329,8 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
         max_y=name_header.cy + page_height * 0.05,
     )
     unit_header = exact_header_near(tokens, "单位", spec_header, page_height, require_right=True)
-    issued_header = find_anchor(
-        tokens,
-        ["应发数", "应发"],
-        min_y=max(0.0, spec_header.cy - page_height * 0.055),
-        max_y=spec_header.cy + page_height * 0.055,
-    )
+    issued_header = find_anchor(tokens, ["应发数", "应发"], min_y=header_min_y, max_y=header_max_y)
+    actual_header = find_anchor(tokens, ["实发数", "实发"], min_y=header_min_y, max_y=header_max_y)
 
     quantity_candidates = [
         token
@@ -305,19 +340,33 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
         and token.cy <= max(name_header.cy, spec_header.cy) + page_height * 0.075
         and token.cx > spec_header.cx
     ]
+
     quantity_header: Token | None = None
-    if quantity_candidates and issued_header is not None:
-        right_of_group = [
-            token
-            for token in quantity_candidates
-            if token.cx >= issued_header.cx - token.width * 0.35
-        ]
-        if right_of_group:
-            quantity_header = min(right_of_group, key=lambda token: token.cx)
+    inferred_half_width: float | None = None
+    if issued_header is not None and actual_header is not None and actual_header.cx > issued_header.cx:
+        split = (issued_header.cx + actual_header.cx) / 2.0
+        issued_candidates = [token for token in quantity_candidates if token.cx < split]
+        actual_candidates = [token for token in quantity_candidates if token.cx >= split]
+        expected = issued_header.cx + (actual_header.cx - issued_header.cx) * 0.25
+        if issued_candidates:
+            quantity_header = min(issued_candidates, key=lambda token: abs(token.cx - expected))
         else:
-            quantity_header = min(quantity_candidates, key=lambda token: abs(token.cx - issued_header.cx))
+            actual_quantity = (
+                min(actual_candidates, key=lambda token: abs(token.cx - actual_header.cx))
+                if actual_candidates
+                else None
+            )
+            quantity_header, inferred_half_width = synthetic_quantity_token(
+                issued_header, actual_header, actual_quantity, spec_header
+            )
+    elif quantity_candidates and issued_header is not None:
+        quantity_header = min(quantity_candidates, key=lambda token: abs(token.cx - issued_header.cx))
     elif quantity_candidates:
         quantity_header = min(quantity_candidates, key=lambda token: token.cx)
+    elif issued_header is not None and actual_header is not None and actual_header.cx > issued_header.cx:
+        quantity_header, inferred_half_width = synthetic_quantity_token(
+            issued_header, actual_header, None, spec_header
+        )
     else:
         warnings.append("未可靠定位“应发数量”列，请人工填写数量。")
 
@@ -347,7 +396,10 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
     else:
         spec_right = min(page_width, spec_header.right + page_width * 0.10)
 
-    if quantity_header is not None:
+    if quantity_header is not None and inferred_half_width is not None:
+        qty_left = quantity_header.cx - inferred_half_width
+        qty_right = quantity_header.cx + inferred_half_width
+    elif quantity_header is not None:
         same_header_row = [
             token
             for token in tokens
@@ -397,7 +449,7 @@ def recover_quantity_from_page_tokens(
 
     row_margin = max(4.0, (bottom - top) * 0.16)
     strict_width = max(1.0, layout.qty_right - layout.qty_left)
-    broad_half = max(strict_width * 1.8, page_width * 0.045)
+    broad_half = max(strict_width * 1.5, page_width * 0.035)
     center = (
         (layout.qty_left + layout.qty_right) / 2.0
         if layout.qty_right > layout.qty_left
@@ -476,7 +528,6 @@ def select_row_bands(
 
 
 def flatten_hough_values(value) -> list[object]:
-    """Flatten OpenCV Hough output without assuming a NumPy array shape."""
     if hasattr(value, "tolist"):
         value = value.tolist()
     if isinstance(value, (list, tuple)):
@@ -488,13 +539,11 @@ def flatten_hough_values(value) -> list[object]:
 
 
 def hough_segments(lines) -> list[tuple[float, float, float, float]]:
-    """Normalize HoughLinesP outputs shaped as (N,1,4), (N,4), or (4,)."""
     if lines is None:
         return []
     values = flatten_hough_values(lines)
     if len(values) < 4 or len(values) % 4 != 0:
         return []
-
     segments: list[tuple[float, float, float, float]] = []
     for index in range(0, len(values), 4):
         try:
@@ -511,7 +560,6 @@ def detect_horizontal_table_lines(image, layout: TableLayout) -> list[float]:
         import numpy as np
     except Exception:
         return []
-
     if image is None or not hasattr(image, "shape") or len(image.shape) < 2:
         return []
     height, width = image.shape[:2]
@@ -520,34 +568,28 @@ def detect_horizontal_table_lines(image, layout: TableLayout) -> list[float]:
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    min_length = max(80, int((layout.qty_right - layout.name_left) * 0.65))
+    min_length = max(80, int((layout.qty_right - layout.name_left) * 0.45))
     lines = cv2.HoughLinesP(
         edges,
         1,
         np.pi / 180.0,
-        threshold=max(40, min_length // 6),
+        threshold=max(32, min_length // 8),
         minLineLength=min_length,
-        maxLineGap=max(12, int(width * 0.02)),
+        maxLineGap=max(12, int(width * 0.025)),
     )
     if lines is None:
         return []
 
     y_values: list[float] = []
-    left_needed = max(0.0, layout.name_left - width * 0.06)
-    right_needed = min(float(width), max(layout.spec_right, layout.qty_right) + width * 0.03)
     max_slope = 0.08
-
     for x1, y1, x2, y2 in hough_segments(lines):
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
         if dx <= 1 or dy / dx > max_slope:
             continue
-        if max(x1, x2) < right_needed or min(x1, x2) > left_needed:
-            continue
         y_mid = (y1 + y2) / 2.0
         if layout.row_start - height * 0.04 <= y_mid <= layout.row_end + height * 0.02:
             y_values.append(y_mid)
-
     return cluster_positions(y_values, max(3.0, height * 0.004))
 
 
@@ -556,13 +598,11 @@ def detect_vertical_table_lines(
     layout: TableLayout,
     bands: Sequence[tuple[float, float]],
 ) -> list[float]:
-    """Detect physical vertical grid rules around the issued-quantity column."""
     try:
         import cv2
         import numpy as np
     except Exception:
         return []
-
     if image is None or not hasattr(image, "shape") or len(image.shape) < 2:
         return []
     height, width = image.shape[:2]
@@ -607,7 +647,6 @@ def detect_vertical_table_lines(
         x_mid = (x1 + x2) / 2.0
         if search_left <= x_mid <= search_right:
             x_values.append(x_mid)
-
     return cluster_positions(x_values, max(3.0, width * 0.004))
 
 
@@ -616,10 +655,8 @@ def snap_quantity_bounds(
     layout: TableLayout,
     page_width: float,
 ) -> tuple[float, float]:
-    """Snap quantity bounds to the nearest physical grid rules around its header."""
     if layout.quantity_header is None:
         return layout.qty_left, layout.qty_right
-
     center = layout.quantity_header.cx
     clustered = cluster_positions(vertical_lines, max(3.0, page_width * 0.004))
     lefts = [x for x in clustered if x < center - 2.0]
@@ -634,11 +671,8 @@ def snap_quantity_bounds(
     max_width = page_width * 0.12
     if width < min_width or width > max_width:
         return layout.qty_left, layout.qty_right
-
-    # Header must sit reasonably inside the snapped cell. This prevents a nearby
-    # unrelated vertical rule from turning a neighboring column into quantity.
     relative = (center - left) / width
-    if relative < 0.15 or relative > 0.85:
+    if relative < 0.12 or relative > 0.88:
         return layout.qty_left, layout.qty_right
     return left, right
 
@@ -660,7 +694,6 @@ def crop_cell(image, left: float, right: float, top: float, bottom: float):
     crop = image[y1:y2, x1:x2]
     if crop.size == 0:
         return None
-
     target_height = 96
     if crop.shape[0] < target_height:
         scale = target_height / max(1, crop.shape[0])
@@ -690,23 +723,17 @@ def ocr_numeric_cell(
 ) -> tuple[float | None, float]:
     if layout.quantity_header is None:
         return None, 0.0
-
     strict_text, strict_score = ocr_cell(engine, image, layout.qty_left, layout.qty_right, top, bottom)
     strict_value = numeric_value(strict_text) if strict_text else None
     if strict_value is not None and strict_value > 0:
         return strict_value, strict_score
 
-    center = (
-        (layout.qty_left + layout.qty_right) / 2.0
-        if layout.qty_right > layout.qty_left
-        else layout.quantity_header.cx
-    )
+    center = (layout.qty_left + layout.qty_right) / 2.0
     strict_width = max(1.0, layout.qty_right - layout.qty_left)
-    half = max(strict_width * 1.18, page_width * 0.03)
+    half = max(strict_width * 1.15, page_width * 0.025)
     crop = crop_cell(image, center - half, center + half, top, bottom)
     if crop is None:
         return None, 0.0
-
     try:
         tokens = run_engine(engine, crop)
     except Exception:
@@ -729,7 +756,6 @@ def ocr_numeric_cell(
         tokens = run_engine(engine, binary)
     except Exception:
         return None, 0.0
-
     numeric_tokens = [
         (numeric_value(token.text), token.score, token)
         for token in tokens
@@ -740,64 +766,6 @@ def ocr_numeric_cell(
     target = binary.shape[1] / 2.0
     numeric_tokens.sort(key=lambda item: (abs(item[2].cx - target), -item[1]))
     return numeric_tokens[0][0], numeric_tokens[0][1]
-
-
-def extract_table_by_grid(
-    engine,
-    image,
-    page_tokens: Sequence[Token],
-    layout: TableLayout,
-    page_height: float,
-    page_width: float,
-) -> tuple[list[dict], list[str]]:
-    horizontal_lines = detect_horizontal_table_lines(image, layout)
-    bands = select_row_bands(horizontal_lines, layout.row_start, layout.row_end, page_height)
-    if not bands:
-        return [], ["未可靠检测到表格横线，已回退到整页文字框解析。"]
-
-    vertical_lines = detect_vertical_table_lines(image, layout, bands)
-    qty_left, qty_right = snap_quantity_bounds(vertical_lines, layout, page_width)
-    effective_layout = replace(layout, qty_left=qty_left, qty_right=qty_right)
-
-    lines: list[dict] = []
-    for top, bottom in bands:
-        name, name_score = ocr_cell(engine, image, layout.name_left, layout.name_right, top, bottom)
-        specification, spec_score = ocr_cell(engine, image, layout.spec_left, layout.spec_right, top, bottom)
-
-        quantity, qty_score = recover_quantity_from_page_tokens(
-            page_tokens, effective_layout, top, bottom, page_width
-        )
-        if quantity is None or quantity <= 0:
-            quantity, qty_score = ocr_numeric_cell(
-                engine, image, effective_layout, top, bottom, page_width
-            )
-
-        if not name and not specification and quantity is None:
-            continue
-
-        quantity_ok = quantity is not None and quantity > 0
-        confidence = required_row_confidence(name_score, spec_score, qty_score, quantity_ok)
-        row_warnings: list[str] = []
-        if not name:
-            row_warnings.append("物资名称未识别")
-        if not specification:
-            row_warnings.append("规格型号未识别")
-        if not quantity_ok:
-            row_warnings.append("应发数量未可靠识别")
-
-        lines.append(
-            {
-                "itemName": name,
-                "specification": specification,
-                "quantity": quantity if quantity_ok else 0.0,
-                "confidence": round(confidence, 4),
-                "warnings": row_warnings,
-            }
-        )
-
-    if not lines:
-        return [], ["表格线已检测，但各数据行未识别到内容，已回退到整页文字框解析。"]
-    return lines, []
 
 
 def extract_table_from_tokens(
@@ -862,6 +830,78 @@ def extract_table_from_tokens(
     return lines, []
 
 
+def row_bands_from_token_lines(
+    lines: Sequence[dict],
+    tokens: Sequence[Token],
+    layout: TableLayout,
+    page_height: float,
+) -> list[tuple[float, float]]:
+    """Build approximate row bands from recognized name/spec token centers.
+
+    This is used only as a cell-OCR fallback when printed horizontal rules are
+    fragmented. It never changes inventory by itself.
+    """
+    row_tokens = [
+        token
+        for token in tokens
+        if layout.row_start < token.cy < layout.row_end
+        and (
+            layout.name_left <= token.cx < layout.name_right
+            or layout.spec_left <= token.cx < layout.spec_right
+        )
+        and not is_probable_label(token)
+    ]
+    if not row_tokens:
+        return []
+    centers = cluster_positions([token.cy for token in row_tokens], max(6.0, page_height * 0.012))
+    if not centers:
+        return []
+    bands: list[tuple[float, float]] = []
+    for index, center in enumerate(centers):
+        prev_center = centers[index - 1] if index > 0 else None
+        next_center = centers[index + 1] if index + 1 < len(centers) else None
+        top = (prev_center + center) / 2.0 if prev_center is not None else center - page_height * 0.018
+        bottom = (center + next_center) / 2.0 if next_center is not None else center + page_height * 0.018
+        bands.append((max(layout.row_start, top), min(layout.row_end, bottom)))
+    return bands[: max(len(lines), 1)]
+
+
+def recover_missing_quantities_with_cells(
+    engine,
+    image,
+    page_tokens: Sequence[Token],
+    layout: TableLayout,
+    lines: list[dict],
+    page_width: float,
+    page_height: float,
+) -> list[dict]:
+    if image is None or not lines or layout.quantity_header is None:
+        return lines
+    bands = row_bands_from_token_lines(lines, page_tokens, layout, page_height)
+    if len(bands) < len(lines):
+        return lines
+
+    repaired: list[dict] = []
+    for line, (top, bottom) in zip(lines, bands):
+        if line.get("quantity", 0) and float(line["quantity"]) > 0:
+            repaired.append(line)
+            continue
+        quantity, score = recover_quantity_from_page_tokens(page_tokens, layout, top, bottom, page_width)
+        if quantity is None or quantity <= 0:
+            quantity, score = ocr_numeric_cell(engine, image, layout, top, bottom, page_width)
+        if quantity is None or quantity <= 0:
+            repaired.append(line)
+            continue
+        updated = dict(line)
+        updated["quantity"] = quantity
+        updated["warnings"] = [warning for warning in updated.get("warnings", []) if "数量" not in warning]
+        updated["confidence"] = round(
+            max(float(updated.get("confidence", 0.0)), min(1.0, 0.67 + score / 3.0)), 4
+        )
+        repaired.append(updated)
+    return repaired
+
+
 def load_image(path: Path):
     try:
         import cv2
@@ -883,7 +923,6 @@ def run(image_path: str) -> dict:
         raise RuntimeError("图片文件不存在")
 
     source_sha256 = sha256_file(path)
-
     try:
         from rapidocr import RapidOCR
     except Exception as exc:
@@ -909,7 +948,6 @@ def run(image_path: str) -> dict:
     basis_anchor = find_anchor(tokens, ["调拨依据"], max_y=top_area)
     supplier_anchor = find_anchor(tokens, ["供应单位"], max_y=top_area)
     receiver_anchor = find_anchor(tokens, ["接收单位"], max_y=top_area)
-
     transfer_basis, basis_score = right_value(basis_anchor, tokens, page_width)
     supplier_unit, supplier_score = right_value(supplier_anchor, tokens, page_width)
     receiver_unit, receiver_score = right_value(receiver_anchor, tokens, page_width)
@@ -920,19 +958,30 @@ def run(image_path: str) -> dict:
     parser_mode = "token-fallback"
 
     if layout is not None:
-        if image is not None:
-            grid_lines, grid_warnings = extract_table_by_grid(
-                engine, image, tokens, layout, page_height, page_width
+        effective_layout = layout
+        if image is not None and layout.quantity_header is not None:
+            vertical_lines = detect_vertical_table_lines(image, layout, [])
+            qty_left, qty_right = snap_quantity_bounds(vertical_lines, layout, page_width)
+            effective_layout = replace(layout, qty_left=qty_left, qty_right=qty_right)
+            if (qty_left, qty_right) != (layout.qty_left, layout.qty_right):
+                parser_mode = "token-geometry+grid-snapped-quantity"
+
+        token_lines, token_warnings = extract_table_from_tokens(tokens, effective_layout, page_height)
+        lines = token_lines
+        warnings.extend(token_warnings)
+
+        if lines and image is not None and any(float(line.get("quantity", 0.0)) <= 0 for line in lines):
+            lines = recover_missing_quantities_with_cells(
+                engine,
+                image,
+                tokens,
+                effective_layout,
+                lines,
+                page_width,
+                page_height,
             )
-            if grid_lines:
-                lines = grid_lines
-                parser_mode = "grid-cell+grid-snapped-quantity"
-            else:
-                warnings.extend(grid_warnings)
-        if not lines:
-            token_lines, token_warnings = extract_table_from_tokens(tokens, layout, page_height)
-            lines = token_lines
-            warnings.extend(token_warnings)
+            if all(float(line.get("quantity", 0.0)) > 0 for line in lines):
+                parser_mode = "token-geometry+cell-quantity-fallback"
 
     if not transfer_basis:
         warnings.append("调拨依据未可靠识别。")
