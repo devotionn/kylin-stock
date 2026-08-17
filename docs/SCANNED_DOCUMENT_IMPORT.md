@@ -35,7 +35,7 @@
 物资名称 + 规格型号
 ```
 
-名称相同、规格不同的物资不允许被 OCR 自动猜成同一个物资。
+名称相同、规格不同的物资不允许被 OCR 自动猜成同一个物资。若扫描件没有可靠识别出规格型号，而系统中的同名物资本身存在规格，系统也不会退化成“只按名称”自动匹配，必须人工确认。
 
 ## 安全入账边界
 
@@ -86,25 +86,58 @@ Tauri/Rust
 
 `src-tauri/resources/requirements-ocr.txt`
 
-目标环境推荐单独创建 venv：
+### 银河麒麟 / Linux
+
+目标环境运行：
 
 ```bash
 bash scripts/setup-ocr-runtime.sh
-export KYLIN_STOCK_OCR_PYTHON="$HOME/.local/share/kylin-stock/ocr-venv/bin/python"
 ```
 
-完全离线安装时，通过 `KYLIN_STOCK_OCR_WHEELHOUSE` 指向事先准备好的 ARM64 wheels 目录。
+默认安装到：
 
-Windows 开发机可使用：
+```text
+$HOME/.local/share/kylin-stock/ocr-venv
+```
+
+应用会自动发现该标准 venv，因此从桌面图标启动时**不需要**再手工 `export` 环境变量。
+
+完全离线安装时，通过 `KYLIN_STOCK_OCR_WHEELHOUSE` 指向事先准备好的 ARM64 wheels 目录：
+
+```bash
+KYLIN_STOCK_OCR_WHEELHOUSE=/path/to/wheels bash scripts/setup-ocr-runtime.sh
+```
+
+### Windows 开发机
+
+运行：
 
 ```powershell
 .\scripts\setup-ocr-runtime.ps1
 ```
 
-也可以显式设置：
+默认安装到：
+
+```text
+%LOCALAPPDATA%\KylinStock\ocr-venv
+```
+
+应用同样会自动发现该 venv。
+
+### 高级覆盖
+
+只有需要使用自定义 Python 环境时，才显式设置：
 
 ```text
 KYLIN_STOCK_OCR_PYTHON=/absolute/path/to/python
+```
+
+运行时优先级：
+
+```text
+KYLIN_STOCK_OCR_PYTHON
+  -> 标准 KylinStock OCR venv
+  -> 系统 python/python3 fallback
 ```
 
 ## 当前模板范围
@@ -140,12 +173,15 @@ KYLIN_STOCK_OCR_PYTHON=/absolute/path/to/python
 
 - 识别结果可人工修正；
 - 同名不同规格不会错误自动匹配；
+- OCR 未识别规格时不会猜选一个带规格的同名物资；
+- `资料袋`、`附件盒` 等包含表头词的真实物资名称不会被过滤；
 - 任一明细不完整时禁止提交；
 - 一次确认后所有行一起成功；
 - 人为制造一行数据库失败时整单回滚；
 - 同一图片第二次提交被拒绝；
 - 库存、流水、Excel 导出均显示规格型号；
-- 目标 ARM64 包仍能通过现有 native package smoke build。
+- 目标 ARM64 环境可安装并通过 RapidOCR/ONNX Runtime 自检；
+- 目标 ARM64 包仍能通过 native package smoke build，且包含 OCR worker 与依赖清单资源。
 
 ## 后续增强（非首期阻塞）
 
@@ -154,4 +190,5 @@ KYLIN_STOCK_OCR_PYTHON=/absolute/path/to/python
 - 扫描件自动旋转/透视纠偏；
 - 低置信度单元格局部重识别；
 - 物资别名表；
+- 原始扫描图片归档，用于更强审计追溯；
 - 大模型仅作为低置信度纠错/建议层，不直接获得库存写权限。
