@@ -1,4 +1,5 @@
 mod backup;
+mod document_import;
 mod inventory;
 mod migration;
 mod ocr;
@@ -12,6 +13,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backup::create_database_backup,
             backup::restore_database_backup,
+            document_import::import_scanned_document,
             inventory::stock_in,
             inventory::batch_stock_in,
             inventory::stock_out,
