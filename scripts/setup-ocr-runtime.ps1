@@ -28,6 +28,5 @@ if ($LASTEXITCODE -ne 0) { throw "OCR dependency installation failed" }
 & $RapidOcr check
 if ($LASTEXITCODE -ne 0) { throw "RapidOCR self-check failed" }
 
-Write-Host "OCR runtime ready."
-Write-Host "Before starting KylinStock in this PowerShell session run:"
-Write-Host "`$env:KYLIN_STOCK_OCR_PYTHON='$VenvPython'"
+Write-Host "OCR runtime ready: $VenvDir"
+Write-Host "KylinStock will auto-discover this standard OCR environment when launched normally."
