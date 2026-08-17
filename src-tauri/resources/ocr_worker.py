@@ -124,8 +124,11 @@ def find_anchor(
 
 
 def is_probable_label(token: Token) -> bool:
+    # Header labels are short and deterministic in this fixed template. Using
+    # substring matching here would incorrectly drop legitimate material names
+    # such as “资料袋” or “附件盒”. Punctuation is already normalized by compact().
     value = compact(token.text)
-    return any(value == compact(label) or compact(label) in value for label in LABEL_WORDS)
+    return value in LABEL_WORDS
 
 
 def right_value(anchor: Token | None, tokens: Sequence[Token], page_width: float) -> tuple[str, float]:
