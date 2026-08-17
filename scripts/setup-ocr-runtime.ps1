@@ -20,12 +20,12 @@ Invoke-Python @("-c", "import sys; assert sys.version_info >= (3,11), 'Python 3.
 Invoke-Python @("-m", "venv", $VenvDir)
 
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+$RapidOcr = Join-Path $VenvDir "Scripts\rapidocr.exe"
 & $VenvPython -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 & $VenvPython -m pip install -r $Requirements
-& $VenvPython -m rapidocr check
-if ($LASTEXITCODE -ne 0) {
-  & (Join-Path $VenvDir "Scripts\rapidocr.exe") check
-}
+if ($LASTEXITCODE -ne 0) { throw "OCR dependency installation failed" }
+& $RapidOcr check
 if ($LASTEXITCODE -ne 0) { throw "RapidOCR self-check failed" }
 
 Write-Host "OCR runtime ready."
