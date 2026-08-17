@@ -89,14 +89,32 @@ fn find_worker(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "OCR worker 未随应用安装，请重新安装完整程序".to_string())
 }
 
-fn python_executable() -> String {
-    env::var("KYLIN_STOCK_OCR_PYTHON").unwrap_or_else(|_| {
-        if cfg!(target_os = "windows") {
-            "python".into()
-        } else {
-            "python3".into()
-        }
-    })
+fn installed_venv_python() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|base| base.join("KylinStock").join("ocr-venv").join("Scripts").join("python.exe"))
+            .filter(|candidate| candidate.is_file())
+    } else {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".local").join("share").join("kylin-stock").join("ocr-venv").join("bin").join("python"))
+            .filter(|candidate| candidate.is_file())
+    }
+}
+
+fn python_executable() -> PathBuf {
+    if let Some(override_path) = env::var_os("KYLIN_STOCK_OCR_PYTHON") {
+        return PathBuf::from(override_path);
+    }
+    if let Some(venv_python) = installed_venv_python() {
+        return venv_python;
+    }
+    if cfg!(target_os = "windows") {
+        PathBuf::from("python")
+    } else {
+        PathBuf::from("python3")
+    }
 }
 
 fn truncate_stderr(bytes: &[u8]) -> String {
@@ -111,6 +129,7 @@ fn truncate_stderr(bytes: &[u8]) -> String {
 
 fn run_worker(worker: PathBuf, image: PathBuf) -> Result<RecognizedTransferDocument, String> {
     let python = python_executable();
+    let python_display = python.to_string_lossy();
     let output = Command::new(&python)
         .arg(&worker)
         .arg(&image)
@@ -118,7 +137,7 @@ fn run_worker(worker: PathBuf, image: PathBuf) -> Result<RecognizedTransferDocum
         .output()
         .map_err(|e| {
             format!(
-                "无法启动本地 OCR 环境（{python}）：{e}。请安装 Python OCR 运行环境，或设置 KYLIN_STOCK_OCR_PYTHON。"
+                "无法启动本地 OCR 环境（{python_display}）：{e}。请先运行 OCR 安装脚本，或设置 KYLIN_STOCK_OCR_PYTHON。"
             )
         })?;
 
