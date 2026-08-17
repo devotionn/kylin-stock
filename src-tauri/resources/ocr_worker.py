@@ -9,9 +9,11 @@ For fixed grid forms the preferred path is two-stage OCR:
 1. OCR the whole page to locate semantic headers/columns.
 2. Detect horizontal table rules and OCR each material cell independently.
 
-This prevents a full-page detector from merging two adjacent material rows into
-one text box (for example `粉笔橡皮`). If grid detection is unavailable or not
-reliable enough, the older geometry-token parser remains as a safe fallback.
+Quantity extraction intentionally uses two channels: a numeric token already
+recognized on the full page is preferred when it falls in the issued-quantity
+column and the current material row; cropped-cell OCR is the fallback. This is
+more robust for narrow numeric cells where a detector may miss `1000` after a
+crop even though the full-page pass recognized it correctly.
 """
 
 from __future__ import annotations
@@ -94,9 +96,6 @@ def sha256_file(path: Path) -> str:
 
 
 def token_from(box: Sequence[Sequence[float]], text: str, score: float) -> Token | None:
-    # RapidOCR 3.x returns NumPy arrays for boxes. A NumPy array cannot be used
-    # in a boolean expression (`if not box`) when it contains multiple values,
-    # so validate it structurally instead.
     if box is None or len(box) < 4:
         return None
     try:
@@ -138,8 +137,6 @@ def tokens_from_result(result) -> list[Token]:
 
 
 def run_engine(engine, source) -> list[Token]:
-    # RapidOCR emits informational logs. stdout is reserved for our single JSON
-    # protocol document, so redirect library stdout to stderr for every pass.
     with contextlib.redirect_stdout(sys.stderr):
         result = engine(source)
     return tokens_from_result(result)
@@ -174,8 +171,6 @@ def find_anchor(
 
 
 def is_probable_label(token: Token) -> bool:
-    # Use exact labels only. Substring matching would incorrectly discard real
-    # material names such as “资料袋” or “附件盒”.
     return compact(token.text) in LABEL_WORDS
 
 
@@ -223,6 +218,23 @@ def join_tokens(tokens: Iterable[Token]) -> tuple[str, float]:
     text = "".join(clean_value(token.text) for token in ordered).strip()
     score = sum(token.score for token in ordered) / len(ordered)
     return text, score
+
+
+def required_row_confidence(
+    name_score: float,
+    spec_score: float,
+    qty_score: float,
+    quantity_ok: bool,
+) -> float:
+    """Confidence is for the complete business row, not only OCR text boxes."""
+    confidence = (
+        max(0.0, min(1.0, name_score))
+        + max(0.0, min(1.0, spec_score))
+        + max(0.0, min(1.0, qty_score))
+    ) / 3.0
+    if not quantity_ok:
+        confidence = min(confidence, 0.65)
+    return confidence
 
 
 def cluster_rows(tokens: Sequence[Token], tolerance: float) -> list[list[Token]]:
@@ -296,12 +308,21 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
     ]
     quantity_header: Token | None = None
     if quantity_candidates and issued_header is not None:
-        # The first “数量” under the 应发数 group is the business quantity we
-        # need. Choose by proximity to that group rather than by absolute page x.
-        quantity_header = min(
-            quantity_candidates,
-            key=lambda token: abs(token.cx - issued_header.cx) + abs(token.cy - issued_header.cy) * 0.35,
-        )
+        # “应发数” normally spans 等级+数量, so its center lies between them.
+        # Prefer the first 数量 at/right of the group center; this avoids picking
+        # the later 实发数量 column on wide forms.
+        right_of_group = [
+            token
+            for token in quantity_candidates
+            if token.cx >= issued_header.cx - token.width * 0.35
+        ]
+        if right_of_group:
+            quantity_header = min(right_of_group, key=lambda token: token.cx)
+        else:
+            quantity_header = min(
+                quantity_candidates,
+                key=lambda token: abs(token.cx - issued_header.cx),
+            )
     elif quantity_candidates:
         quantity_header = min(quantity_candidates, key=lambda token: token.cx)
     else:
@@ -321,9 +342,6 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
             footer_candidates.append(anchor.top)
     row_end = min(footer_candidates) if footer_candidates else page_height * 0.74
 
-    # Exclude the serial-number column. The earlier implementation extended the
-    # name column leftward by 8% of the page, which is why a real scan produced
-    # `12粉笔橡皮` instead of two material names.
     if serial_header is not None and serial_header.cx < name_header.cx:
         name_left = (serial_header.cx + name_header.cx) / 2.0
     else:
@@ -374,6 +392,60 @@ def table_layout(tokens: Sequence[Token], page_width: float, page_height: float)
     ), warnings
 
 
+def recover_quantity_from_page_tokens(
+    tokens: Sequence[Token],
+    layout: TableLayout,
+    top: float,
+    bottom: float,
+    page_width: float,
+) -> tuple[float | None, float]:
+    """Recover the issued quantity already recognized by the full-page pass.
+
+    A broad corridor is allowed because perspective can move cell content away
+    from the subheader center. Candidates are ranked by whether they are inside
+    the strict issued-quantity bounds, then by x-distance to the header center.
+    This naturally rejects serial numbers and unit prices that are much farther
+    left, as well as the later actual-quantity column farther right.
+    """
+    if layout.quantity_header is None:
+        return None, 0.0
+
+    row_margin = max(4.0, (bottom - top) * 0.16)
+    strict_width = max(1.0, layout.qty_right - layout.qty_left)
+    broad_half = max(strict_width * 1.8, page_width * 0.045)
+    center = layout.quantity_header.cx
+    broad_left = center - broad_half
+    broad_right = center + broad_half
+
+    candidates: list[tuple[int, float, float, float, Token]] = []
+    for token in tokens:
+        if token.cy < top - row_margin or token.cy > bottom + row_margin:
+            continue
+        if token.cx < broad_left or token.cx > broad_right:
+            continue
+        if is_probable_label(token):
+            continue
+        value = numeric_value(token.text)
+        if value is None or value <= 0:
+            continue
+        strict_rank = 0 if layout.qty_left <= token.cx <= layout.qty_right else 1
+        candidates.append(
+            (
+                strict_rank,
+                abs(token.cx - center),
+                abs(token.cy - (top + bottom) / 2.0),
+                -token.score,
+                token,
+            )
+        )
+
+    if not candidates:
+        return None, 0.0
+    candidates.sort(key=lambda item: item[:4])
+    token = candidates[0][4]
+    return numeric_value(token.text), token.score
+
+
 def cluster_positions(values: Sequence[float], tolerance: float) -> list[float]:
     clusters: list[list[float]] = []
     for value in sorted(values):
@@ -390,11 +462,6 @@ def select_row_bands(
     row_end: float,
     page_height: float,
 ) -> list[tuple[float, float]]:
-    """Turn detected horizontal rules into material row bands.
-
-    Keeping this pure makes the critical row-separation rule unit-testable even
-    on CI runners without OpenCV.
-    """
     tolerance = max(3.0, page_height * 0.004)
     lines = cluster_positions(horizontal_lines, tolerance)
     near = [
@@ -405,7 +472,6 @@ def select_row_bands(
     if len(near) < 2:
         return []
 
-    # First rule at/after the header is the top edge of data row 1.
     top_candidates = [y for y in near if y >= row_start - page_height * 0.018]
     if not top_candidates:
         return []
@@ -450,7 +516,7 @@ def detect_horizontal_table_lines(image, layout: TableLayout) -> list[float]:
     y_values: list[float] = []
     left_needed = max(0.0, layout.name_left - width * 0.06)
     right_needed = min(float(width), max(layout.spec_right, layout.qty_right) + width * 0.03)
-    max_slope = 0.08  # tolerate modest camera skew/perspective
+    max_slope = 0.08
 
     for raw in lines:
         x1, y1, x2, y2 = [float(value) for value in raw[0]]
@@ -475,7 +541,6 @@ def crop_cell(image, left: float, right: float, top: float, bottom: float):
     if image is None:
         return None
     height, width = image.shape[:2]
-    # Stay inside grid rules; a few pixels of white margin are added afterward.
     inset_x = max(2, int(width * 0.0015))
     inset_y = max(2, int(height * 0.0015))
     x1 = max(0, min(width - 1, int(round(left)) + inset_x))
@@ -486,7 +551,6 @@ def crop_cell(image, left: float, right: float, top: float, bottom: float):
     if crop.size == 0:
         return None
 
-    # Upscale short cells so small Chinese characters/digits are not penalized.
     target_height = 96
     if crop.shape[0] < target_height:
         scale = target_height / max(1, crop.shape[0])
@@ -506,11 +570,74 @@ def ocr_cell(engine, image, left: float, right: float, top: float, bottom: float
     return join_tokens(tokens)
 
 
-def extract_table_by_grid(
+def ocr_numeric_cell(
     engine,
     image,
     layout: TableLayout,
+    top: float,
+    bottom: float,
+    page_width: float,
+) -> tuple[float | None, float]:
+    """OCR a numeric cell with a wider crop and threshold fallback."""
+    if layout.quantity_header is None:
+        return None, 0.0
+
+    strict_text, strict_score = ocr_cell(
+        engine, image, layout.qty_left, layout.qty_right, top, bottom
+    )
+    strict_value = numeric_value(strict_text) if strict_text else None
+    if strict_value is not None and strict_value > 0:
+        return strict_value, strict_score
+
+    center = layout.quantity_header.cx
+    strict_width = max(1.0, layout.qty_right - layout.qty_left)
+    half = max(strict_width * 1.35, page_width * 0.035)
+    crop = crop_cell(image, center - half, center + half, top, bottom)
+    if crop is None:
+        return None, 0.0
+
+    try:
+        tokens = run_engine(engine, crop)
+    except Exception:
+        tokens = []
+    numeric_tokens = [
+        (numeric_value(token.text), token.score, token)
+        for token in tokens
+        if numeric_value(token.text) is not None and numeric_value(token.text) > 0
+    ]
+    if numeric_tokens:
+        target = crop.shape[1] / 2.0
+        numeric_tokens.sort(key=lambda item: (abs(item[2].cx - target), -item[1]))
+        return numeric_tokens[0][0], numeric_tokens[0][1]
+
+    try:
+        import cv2
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        binary = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        tokens = run_engine(engine, binary)
+    except Exception:
+        return None, 0.0
+
+    numeric_tokens = [
+        (numeric_value(token.text), token.score, token)
+        for token in tokens
+        if numeric_value(token.text) is not None and numeric_value(token.text) > 0
+    ]
+    if not numeric_tokens:
+        return None, 0.0
+    target = binary.shape[1] / 2.0
+    numeric_tokens.sort(key=lambda item: (abs(item[2].cx - target), -item[1]))
+    return numeric_tokens[0][0], numeric_tokens[0][1]
+
+
+def extract_table_by_grid(
+    engine,
+    image,
+    page_tokens: Sequence[Token],
+    layout: TableLayout,
     page_height: float,
+    page_width: float,
 ) -> tuple[list[dict], list[str]]:
     horizontal_lines = detect_horizontal_table_lines(image, layout)
     bands = select_row_bands(horizontal_lines, layout.row_start, layout.row_end, page_height)
@@ -521,31 +648,33 @@ def extract_table_by_grid(
     for top, bottom in bands:
         name, name_score = ocr_cell(engine, image, layout.name_left, layout.name_right, top, bottom)
         specification, spec_score = ocr_cell(engine, image, layout.spec_left, layout.spec_right, top, bottom)
-        if layout.quantity_header is not None:
-            quantity_text, qty_score = ocr_cell(engine, image, layout.qty_left, layout.qty_right, top, bottom)
-            quantity = numeric_value(quantity_text) if quantity_text else None
-        else:
-            quantity_text, qty_score, quantity = "", 0.0, None
 
-        # Empty rows are common in the printed template; do not surface them.
+        quantity, qty_score = recover_quantity_from_page_tokens(
+            page_tokens, layout, top, bottom, page_width
+        )
+        if quantity is None or quantity <= 0:
+            quantity, qty_score = ocr_numeric_cell(
+                engine, image, layout, top, bottom, page_width
+            )
+
         if not name and not specification and quantity is None:
             continue
 
-        confidence_values = [score for score in (name_score, spec_score, qty_score) if score > 0]
-        confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+        quantity_ok = quantity is not None and quantity > 0
+        confidence = required_row_confidence(name_score, spec_score, qty_score, quantity_ok)
         row_warnings: list[str] = []
         if not name:
             row_warnings.append("物资名称未识别")
         if not specification:
             row_warnings.append("规格型号未识别")
-        if quantity is None or quantity <= 0:
+        if not quantity_ok:
             row_warnings.append("应发数量未可靠识别")
 
         lines.append(
             {
                 "itemName": name,
                 "specification": specification,
-                "quantity": quantity if quantity is not None else 0.0,
+                "quantity": quantity if quantity_ok else 0.0,
                 "confidence": round(confidence, 4),
                 "warnings": row_warnings,
             }
@@ -578,8 +707,6 @@ def extract_table_from_tokens(
         return [], ["表格区域未识别到物资明细，请人工录入。"]
 
     typical_height = median([token.height for token in candidates])
-    # Conservative fallback: do not merge rows simply because a detector emitted
-    # one unusually tall box. Grid-cell OCR is preferred for real fixed forms.
     tolerance = max(min(typical_height * 0.72, page_height * 0.018), page_height * 0.006)
     rows = cluster_rows(candidates, tolerance)
 
@@ -599,20 +726,20 @@ def extract_table_from_tokens(
 
         if not name and not specification and quantity is None:
             continue
-        confidence_values = [score for score in (name_score, spec_score, qty_score) if score > 0]
-        confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+        quantity_ok = quantity is not None and quantity > 0
+        confidence = required_row_confidence(name_score, spec_score, qty_score, quantity_ok)
         row_warnings: list[str] = []
         if not name:
             row_warnings.append("物资名称未识别")
         if not specification:
             row_warnings.append("规格型号未识别")
-        if quantity is None or quantity <= 0:
+        if not quantity_ok:
             row_warnings.append("应发数量未可靠识别")
         lines.append(
             {
                 "itemName": name,
                 "specification": specification,
-                "quantity": quantity if quantity is not None else 0.0,
+                "quantity": quantity if quantity_ok else 0.0,
                 "confidence": round(confidence, 4),
                 "warnings": row_warnings,
             }
@@ -640,7 +767,7 @@ def run(image_path: str) -> dict:
 
     try:
         from rapidocr import RapidOCR
-    except Exception as exc:  # pragma: no cover - target environment concern
+    except Exception as exc:
         raise RuntimeError(
             "OCR运行环境未安装。请安装 rapidocr 与 onnxruntime，或设置 KYLIN_STOCK_OCR_PYTHON 指向已配置的Python环境。"
         ) from exc
@@ -675,10 +802,17 @@ def run(image_path: str) -> dict:
 
     if layout is not None:
         if image is not None:
-            grid_lines, grid_warnings = extract_table_by_grid(engine, image, layout, page_height)
+            grid_lines, grid_warnings = extract_table_by_grid(
+                engine,
+                image,
+                tokens,
+                layout,
+                page_height,
+                page_width,
+            )
             if grid_lines:
                 lines = grid_lines
-                parser_mode = "grid-cell"
+                parser_mode = "grid-cell+page-quantity"
             else:
                 warnings.extend(grid_warnings)
         if not lines:
@@ -717,8 +851,6 @@ def main() -> int:
         return 64
     try:
         payload = run(sys.argv[1])
-        # stdout is a UTF-8 JSON protocol, independent of the Windows console
-        # code page. Rust also launches us with PYTHONUTF8/PYTHONIOENCODING set.
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8", errors="replace"
         )
