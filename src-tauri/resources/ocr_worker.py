@@ -70,7 +70,10 @@ def sha256_file(path: Path) -> str:
 
 
 def token_from(box: Sequence[Sequence[float]], text: str, score: float) -> Token | None:
-    if not box or len(box) < 4:
+    # RapidOCR 3.x returns NumPy arrays for boxes. A NumPy array cannot be used
+    # in a boolean expression (`if not box`) when it contains multiple values,
+    # so validate it structurally instead.
+    if box is None or len(box) < 4:
         return None
     try:
         xs = [float(point[0]) for point in box]
@@ -83,7 +86,7 @@ def token_from(box: Sequence[Sequence[float]], text: str, score: float) -> Token
         return None
     return Token(
         text=clean_value(text),
-        score=float(score or 0.0),
+        score=float(score),
         left=left,
         right=right,
         top=top,
