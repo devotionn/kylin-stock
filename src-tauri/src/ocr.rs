@@ -130,10 +130,17 @@ fn truncate_stderr(bytes: &[u8]) -> String {
 fn run_worker(worker: PathBuf, image: PathBuf) -> Result<RecognizedTransferDocument, String> {
     let python = python_executable();
     let python_display = python.to_string_lossy();
+
+    // stdout is a machine protocol, not console text. On Windows a redirected
+    // Python stdout may otherwise inherit the local ANSI code page (for example
+    // GBK), while serde_json requires UTF-8 JSON bytes. Force UTF-8 on both
+    // stdout and stderr so Chinese OCR text is transported deterministically.
     let output = Command::new(&python)
         .arg(&worker)
         .arg(&image)
         .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .output()
         .map_err(|e| {
             format!(
