@@ -5,6 +5,7 @@ export interface Location { id: number; name: string; remark: string | null; sta
 export interface Material {
   id: number
   name: string
+  specification: string | null
   unit_id: number | null
   unit_name: string | null
   category: string | null
@@ -17,6 +18,10 @@ export interface Material {
 }
 
 const now = () => new Date().toISOString()
+
+function normalizeIdentityPart(value?: string | null) {
+  return value?.trim() || null
+}
 
 export async function listUnits(): Promise<Unit[]> {
   return withDatabaseAccess(async () =>
@@ -51,14 +56,14 @@ export async function listMaterials(keyword = ''): Promise<Material[]> {
   const q = `%${keyword.trim()}%`
   return withDatabaseAccess(async () =>
     (await getDatabase()).select<Material[]>(`
-      SELECT m.id, m.name, m.unit_id, u.name AS unit_name, m.category,
+      SELECT m.id, m.name, m.specification, m.unit_id, u.name AS unit_name, m.category,
              m.default_location_id, l.name AS location_name, m.remark,
              m.status, m.created_at, m.updated_at
       FROM materials m
       LEFT JOIN units u ON u.id = m.unit_id
       LEFT JOIN locations l ON l.id = m.default_location_id
-      WHERE ($1 = '%%' OR m.name LIKE $1 OR COALESCE(m.category, '') LIKE $1)
-      ORDER BY m.status DESC, m.name
+      WHERE ($1 = '%%' OR m.name LIKE $1 OR COALESCE(m.specification, '') LIKE $1 OR COALESCE(m.category, '') LIKE $1)
+      ORDER BY m.status DESC, m.name, COALESCE(m.specification, '')
     `, [q]),
   )
 }
@@ -66,6 +71,7 @@ export async function listMaterials(keyword = ''): Promise<Material[]> {
 export async function saveMaterial(input: {
   id?: number
   name: string
+  specification?: string | null
   unitId?: number | null
   category?: string
   locationId?: number | null
@@ -74,6 +80,7 @@ export async function saveMaterial(input: {
   const normalized = {
     id: input.id,
     name: input.name.trim(),
+    specification: normalizeIdentityPart(input.specification),
     unitId: input.unitId ?? null,
     category: input.category?.trim() || null,
     locationId: input.locationId ?? null,
@@ -84,35 +91,35 @@ export async function saveMaterial(input: {
   return withDatabaseMutation(async () => {
     const db = await getDatabase()
 
-    // V1 intentionally has no user-visible product/SKU code. Therefore the
-    // material name is the human-facing identity. Keep duplicate detection and
-    // the following INSERT/UPDATE in the same application mutation turn so two
-    // callers cannot both pass the precheck concurrently.
+    // Scanned documents often distinguish otherwise identical material names by
+    // specification/model. Treat (name, specification) as the human-facing
+    // identity while keeping the whole precheck + write in one mutation turn.
     const conflicts = await db.select<{ id: number; status: number }[]>(`
       SELECT id, status
       FROM materials
       WHERE name = $1 COLLATE NOCASE
-        AND ($2 IS NULL OR id <> $2)
+        AND COALESCE(specification, '') = COALESCE($2, '') COLLATE NOCASE
+        AND ($3 IS NULL OR id <> $3)
       LIMIT 1
-    `, [normalized.name, normalized.id ?? null])
+    `, [normalized.name, normalized.specification, normalized.id ?? null])
     if (conflicts.length) {
       throw new Error(conflicts[0].status === 0
-        ? '已存在同名物资，但当前处于停用状态，请直接重新启用原物资'
-        : '已存在同名物资，请勿重复添加')
+        ? '已存在同名同规格物资，但当前处于停用状态，请直接重新启用原物资'
+        : '已存在同名同规格物资，请勿重复添加')
     }
 
     const timestamp = now()
     if (normalized.id) {
-      return db.execute(`UPDATE materials SET name=$1, unit_id=$2, category=$3,
-        default_location_id=$4, remark=$5, updated_at=$6 WHERE id=$7`, [
-        normalized.name, normalized.unitId, normalized.category,
+      return db.execute(`UPDATE materials SET name=$1, specification=$2, unit_id=$3, category=$4,
+        default_location_id=$5, remark=$6, updated_at=$7 WHERE id=$8`, [
+        normalized.name, normalized.specification, normalized.unitId, normalized.category,
         normalized.locationId, normalized.remark, timestamp, normalized.id,
       ])
     }
     return db.execute(`INSERT INTO materials
-      (name, unit_id, category, default_location_id, remark, status, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5,1,$6,$6)`, [
-      normalized.name, normalized.unitId, normalized.category,
+      (name, specification, unit_id, category, default_location_id, remark, status, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,1,$7,$7)`, [
+      normalized.name, normalized.specification, normalized.unitId, normalized.category,
       normalized.locationId, normalized.remark, timestamp,
     ])
   })
