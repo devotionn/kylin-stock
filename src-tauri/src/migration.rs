@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, str::FromStr, time::Duration};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE: &str = "kylin-stock.db";
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 2;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 3;
 
 struct Migration {
     version: i64,
@@ -93,6 +93,24 @@ const MIGRATIONS: &[Migration] = &[
         statements: &[
             "ALTER TABLE materials ADD COLUMN specification TEXT",
             "CREATE INDEX IF NOT EXISTS idx_materials_name_specification ON materials(name, specification)",
+        ],
+    },
+    Migration {
+        version: 3,
+        statements: &[
+            r#"CREATE TABLE IF NOT EXISTS document_imports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_hash TEXT NOT NULL UNIQUE,
+                source_file_name TEXT NOT NULL,
+                document_type TEXT NOT NULL,
+                transfer_basis TEXT,
+                supplier_unit TEXT,
+                receiver_unit TEXT,
+                line_count INTEGER NOT NULL CHECK(line_count > 0),
+                transaction_numbers TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_document_imports_created_at ON document_imports(created_at)",
         ],
     },
 ];
@@ -216,6 +234,17 @@ mod tests {
             == 1
     }
 
+    async fn table_exists(connection: &mut SqliteConnection, table: &str) -> bool {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+        )
+        .bind(table)
+        .fetch_one(connection)
+        .await
+        .expect("inspect table")
+            == 1
+    }
+
     #[tokio::test]
     async fn fresh_database_is_created_at_latest_version() {
         let mut connection = memory_database().await;
@@ -235,21 +264,15 @@ mod tests {
             "stock_transactions",
             "backup_records",
             "app_settings",
+            "document_imports",
         ];
         for table in required_tables {
-            let count = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-            )
-            .bind(table)
-            .fetch_one(&mut connection)
-            .await
-            .expect("inspect schema");
-            assert_eq!(count, 1, "missing table {table}");
+            assert!(table_exists(&mut connection, table).await, "missing table {table}");
         }
     }
 
     #[tokio::test]
-    async fn version_one_database_adds_specification_without_data_loss() {
+    async fn version_one_database_upgrades_without_material_data_loss() {
         let mut connection = memory_database().await;
         for migration in MIGRATIONS.iter().filter(|migration| migration.version == 1) {
             for statement in migration.statements {
@@ -274,8 +297,9 @@ mod tests {
             .await
             .expect("upgrade v1 database");
 
-        assert_eq!(version, 2);
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
         assert!(column_exists(&mut connection, "materials", "specification").await);
+        assert!(table_exists(&mut connection, "document_imports").await);
         let row = sqlx::query_as::<_, (String, Option<String>)>(
             "SELECT name, specification FROM materials WHERE id=1",
         )
@@ -284,6 +308,30 @@ mod tests {
         .expect("read upgraded material");
         assert_eq!(row.0, "网线");
         assert_eq!(row.1, None);
+    }
+
+    #[tokio::test]
+    async fn version_two_database_adds_document_import_ledger() {
+        let mut connection = memory_database().await;
+        for migration in MIGRATIONS.iter().filter(|migration| migration.version <= 2) {
+            for statement in migration.statements {
+                sqlx::query(statement)
+                    .execute(&mut connection)
+                    .await
+                    .expect("create version two schema");
+            }
+        }
+        sqlx::query("PRAGMA user_version = 2")
+            .execute(&mut connection)
+            .await
+            .expect("set v2 schema version");
+
+        let version = run_migrations_on_connection(&mut connection)
+            .await
+            .expect("upgrade v2 database");
+
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+        assert!(table_exists(&mut connection, "document_imports").await);
     }
 
     #[tokio::test]
@@ -322,6 +370,7 @@ mod tests {
             .expect("read preserved row");
         assert_eq!(name, "网线");
         assert!(column_exists(&mut connection, "materials", "specification").await);
+        assert!(table_exists(&mut connection, "document_imports").await);
         assert_eq!(user_version(&mut connection).await, LATEST_SCHEMA_VERSION);
     }
 
