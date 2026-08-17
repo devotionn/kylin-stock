@@ -89,6 +89,18 @@ jobs:
       - name: RapidOCR runtime self-check
         run: rapidocr check
 
+      - name: RapidOCR ndarray cell-input smoke
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from rapidocr import RapidOCR
+
+          image = np.full((96, 320, 3), 255, dtype=np.uint8)
+          result = RapidOCR()(image)
+          assert hasattr(result, 'txts'), type(result)
+          print('RapidOCR accepted NumPy cell image input')
+          PY
+
   arm64-package-smoke:
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 40
