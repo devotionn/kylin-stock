@@ -9,6 +9,7 @@ human verification boundary.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import math
 import re
@@ -60,6 +61,14 @@ def clean_value(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip().strip("：:")
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def token_from(box: Sequence[Sequence[float]], text: str, score: float) -> Token | None:
     if not box or len(box) < 4:
         return None
@@ -84,12 +93,6 @@ def token_from(box: Sequence[Sequence[float]], text: str, score: float) -> Token
         width=right - left,
         height=bottom - top,
     )
-
-
-def contains_label(token: Token, label: str) -> bool:
-    text = compact(token.text)
-    target = compact(label)
-    return target in text or text in target if len(text) >= 2 else False
 
 
 def find_anchor(
@@ -190,24 +193,50 @@ def cluster_rows(tokens: Sequence[Token], tolerance: float) -> list[list[Token]]
     return rows
 
 
+def exact_header_near(
+    tokens: Sequence[Token],
+    text: str,
+    reference: Token,
+    page_height: float,
+    *,
+    require_right: bool = False,
+) -> Token | None:
+    candidates = [
+        token
+        for token in tokens
+        if compact(token.text) == compact(text)
+        and abs(token.cy - reference.cy) <= page_height * 0.045
+        and (not require_right or token.cx > reference.cx)
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda token: (abs(token.cy - reference.cy), abs(token.cx - reference.cx)))
+
+
 def extract_table(tokens: Sequence[Token], page_width: float, page_height: float) -> tuple[list[dict], list[str]]:
     warnings: list[str] = []
     upper_limit = page_height * 0.62
     name_header = find_anchor(tokens, ["名称"], max_y=upper_limit)
     spec_header = find_anchor(tokens, ["规格型号", "规格"], max_y=upper_limit)
-    unit_header = find_anchor(tokens, ["单位"], max_y=upper_limit)
-    issued_header = find_anchor(tokens, ["应发数", "应发"], max_y=upper_limit)
 
     if name_header is None or spec_header is None:
         warnings.append("未可靠定位“名称/规格型号”表头，请人工核对明细。")
         return [], warnings
 
+    unit_header = exact_header_near(tokens, "单位", spec_header, page_height, require_right=True)
+    issued_header = find_anchor(
+        tokens,
+        ["应发数", "应发"],
+        min_y=max(0.0, spec_header.cy - page_height * 0.055),
+        max_y=spec_header.cy + page_height * 0.055,
+    )
+
     quantity_candidates = [
         token
         for token in tokens
-        if "数量" in compact(token.text)
+        if compact(token.text) == "数量"
         and token.cy >= min(name_header.cy, spec_header.cy) - page_height * 0.035
-        and token.cy <= max(name_header.cy, spec_header.cy) + page_height * 0.065
+        and token.cy <= max(name_header.cy, spec_header.cy) + page_height * 0.075
         and token.cx > spec_header.cx
     ]
     quantity_header: Token | None = None
@@ -240,7 +269,7 @@ def extract_table(tokens: Sequence[Token], page_width: float, page_height: float
     name_left = max(0.0, name_header.left - page_width * 0.08)
     name_right = (name_header.cx + spec_header.cx) / 2.0
     spec_left = name_right
-    if unit_header is not None and unit_header.cx > spec_header.cx:
+    if unit_header is not None:
         spec_right = (spec_header.cx + unit_header.cx) / 2.0
     else:
         spec_right = spec_header.right + page_width * 0.10
@@ -280,7 +309,6 @@ def extract_table(tokens: Sequence[Token], page_width: float, page_height: float
         quantity_text, qty_score = join_tokens(qty_tokens)
         quantity = numeric_value(quantity_text) if quantity_text else None
 
-        # Ignore empty/line-art noise, but preserve partial OCR rows for review.
         if not name and not specification and quantity is None:
             continue
         confidence_values = [score for score in (name_score, spec_score, qty_score) if score > 0]
@@ -313,6 +341,8 @@ def run(image_path: str) -> dict:
     if not path.is_file():
         raise RuntimeError("图片文件不存在")
 
+    source_sha256 = sha256_file(path)
+
     try:
         from rapidocr import RapidOCR
     except Exception as exc:  # pragma: no cover - target environment concern
@@ -320,8 +350,6 @@ def run(image_path: str) -> dict:
             "OCR运行环境未安装。请安装 rapidocr 与 onnxruntime，或设置 KYLIN_STOCK_OCR_PYTHON 指向已配置的Python环境。"
         ) from exc
 
-    # Keep third-party logs away from stdout. Rust expects stdout to contain a
-    # single JSON document only.
     with contextlib.redirect_stdout(sys.stderr):
         engine = RapidOCR()
         result = engine(str(path))
@@ -365,6 +393,7 @@ def run(image_path: str) -> dict:
 
     return {
         "documentType": "TRANSFER_RECEIVE",
+        "sourceSha256": source_sha256,
         "transferBasis": transfer_basis,
         "supplierUnit": supplier_unit,
         "receiverUnit": receiver_unit,
