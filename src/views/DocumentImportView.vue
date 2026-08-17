@@ -2,7 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listLocations, listMaterials, type Location, type Material } from '../services/masterData'
+import {
+  createLocation,
+  listLocations,
+  listMaterials,
+  saveMaterial,
+  type Location,
+  type Material,
+} from '../services/masterData'
 import {
   importScannedDocument,
   recognizeTransferDocument,
@@ -22,6 +29,7 @@ interface DraftLine extends RecognizedDocumentLine {
 const loading = ref(false)
 const recognizing = ref(false)
 const posting = ref(false)
+const masterMutating = ref(false)
 const imported = ref(false)
 const sourcePath = ref('')
 const recognized = ref<RecognizedTransferDocument | null>(null)
@@ -37,7 +45,7 @@ const form = reactive({
   handler: '',
 })
 
-const busy = computed(() => loading.value || recognizing.value || posting.value)
+const busy = computed(() => loading.value || recognizing.value || posting.value || masterMutating.value)
 const unresolvedCount = computed(() => lines.value.filter((line) => !line.materialId || !line.locationId || !(Number(line.quantity) > 0)).length)
 const readyToPost = computed(() => Boolean(
   recognized.value?.sourceSha256
@@ -46,6 +54,12 @@ const readyToPost = computed(() => Boolean(
   && unresolvedCount.value === 0
   && !imported.value,
 ))
+const masterDataHint = computed(() => {
+  const missing: string[] = []
+  if (!materials.value.length) missing.push('系统物资')
+  if (!locations.value.length) missing.push('入库位置')
+  return missing.length ? `当前没有可用的${missing.join('和')}。可直接在本页按 OCR 新建后继续入库，无需离开扫描页面。` : ''
+})
 
 function normalizeIdentity(value?: string | null) {
   return (value ?? '')
@@ -128,6 +142,16 @@ function onMaterialChange(line: DraftLine, materialId?: number) {
   line.matchState = 'MANUAL'
 }
 
+async function refreshMaterialChoices() {
+  const materialRows = await listMaterials()
+  materials.value = materialRows.filter((item) => item.status === 1)
+}
+
+async function refreshLocationChoices() {
+  const locationRows = await listLocations()
+  locations.value = locationRows.filter((item) => item.status === 1)
+}
+
 async function loadMasterData() {
   loading.value = true
   try {
@@ -139,6 +163,79 @@ async function loadMasterData() {
     ElMessage.error(`基础资料加载失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     loading.value = false
+  }
+}
+
+async function createMaterialFromLine(line: DraftLine) {
+  if (busy.value || imported.value) return
+  const name = line.itemName.trim()
+  const specification = line.specification.trim()
+  if (!name) {
+    ElMessage.warning('请先确认 OCR 物资名称')
+    return
+  }
+
+  const label = specification ? `${name} / ${specification}` : name
+  try {
+    await ElMessageBox.confirm(
+      `确认将“${label}”新增为系统物资？这是基础资料变更，不会自动增加库存。`,
+      '按 OCR 新建系统物资',
+      { confirmButtonText: '确认新增', cancelButtonText: '取消', type: 'warning' },
+    )
+    masterMutating.value = true
+    await saveMaterial({
+      name,
+      specification: specification || null,
+      locationId: line.locationId ?? null,
+      remark: '由扫描单据人工确认创建',
+    })
+    await refreshMaterialChoices()
+    autoMatchLine(line, true)
+    if (!line.materialId) {
+      const created = materials.value.find((material) =>
+        normalizeIdentity(material.name) === normalizeIdentity(name)
+        && normalizeIdentity(material.specification) === normalizeIdentity(specification),
+      )
+      if (created) onMaterialChange(line, created.id)
+    }
+    ElMessage.success(`已新增并选择系统物资：${label}`)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(error instanceof Error ? error.message : String(error))
+    }
+  } finally {
+    masterMutating.value = false
+  }
+}
+
+async function createLocationForLine(line: DraftLine) {
+  if (busy.value || imported.value) return
+  try {
+    const result = await ElMessageBox.prompt(
+      '请输入本批物资的入库位置，例如：一号仓、A区货架。创建后会自动选中。',
+      '新建入库位置',
+      {
+        confirmButtonText: '确认新增',
+        cancelButtonText: '取消',
+        inputPlaceholder: '请输入位置名称',
+        inputValidator: (value: string) => value.trim() ? true : '位置名称不能为空',
+      },
+    )
+    const name = String(result.value ?? '').trim()
+    if (!name) return
+
+    masterMutating.value = true
+    await createLocation(name, '由扫描单据人工确认创建')
+    await refreshLocationChoices()
+    const created = locations.value.find((location) => normalizeIdentity(location.name) === normalizeIdentity(name))
+    if (created) line.locationId = created.id
+    ElMessage.success(`已新增并选择入库位置：${name}`)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(error instanceof Error ? error.message : String(error))
+    }
+  } finally {
+    masterMutating.value = false
   }
 }
 
@@ -339,6 +436,15 @@ onMounted(loadMasterData)
         </div>
       </template>
 
+      <el-alert
+        v-if="masterDataHint"
+        :title="masterDataHint"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom:14px"
+      />
+
       <el-table :data="lines" border stripe empty-text="OCR 未提取到明细，可点击“补一行”人工录入">
         <el-table-column label="OCR 名称" min-width="140">
           <template #default="{ row }"><el-input v-model="row.itemName" :disabled="busy || imported" @blur="autoMatchLine(row, true)" /></template>
@@ -346,32 +452,45 @@ onMounted(loadMasterData)
         <el-table-column label="OCR 规格型号" min-width="160">
           <template #default="{ row }"><el-input v-model="row.specification" :disabled="busy || imported" @blur="autoMatchLine(row, true)" /></template>
         </el-table-column>
-        <el-table-column label="应发数量" width="135">
-          <template #default="{ row }"><el-input-number v-model="row.quantity" :disabled="busy || imported" :min="0" :precision="3" style="width:110px" /></template>
+        <el-table-column label="应发数量" width="150">
+          <template #default="{ row }"><el-input-number v-model="row.quantity" :disabled="busy || imported" :min="0" :precision="3" style="width:125px" /></template>
         </el-table-column>
         <el-table-column label="置信度" width="90" align="center">
           <template #default="{ row }"><el-tag size="small" :type="confidenceTag(row.confidence)">{{ confidenceText(row.confidence) }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="对应系统物资" min-width="240">
+        <el-table-column label="对应系统物资" min-width="315">
           <template #default="{ row }">
-            <el-select
-              v-model="row.materialId"
-              :disabled="busy || imported"
-              filterable
-              clearable
-              placeholder="必须确认系统物资"
-              style="width:100%"
-              @change="(value: number | undefined) => onMaterialChange(row, value)"
-            >
-              <el-option v-for="material in materials" :key="material.id" :label="materialLabel(material)" :value="material.id" />
-            </el-select>
+            <div class="selector-with-action">
+              <el-select
+                v-model="row.materialId"
+                :disabled="busy || imported"
+                filterable
+                clearable
+                placeholder="请选择系统物资"
+                style="width:100%"
+                @change="(value: number | undefined) => onMaterialChange(row, value)"
+              >
+                <el-option v-for="material in materials" :key="material.id" :label="materialLabel(material)" :value="material.id" />
+                <template #empty><div class="empty-option">暂无可用系统物资</div></template>
+              </el-select>
+              <el-button
+                type="primary"
+                plain
+                :disabled="busy || imported || !row.itemName.trim()"
+                @click="createMaterialFromLine(row)"
+              >OCR新增</el-button>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="入库位置" min-width="170">
+        <el-table-column label="入库位置" min-width="245">
           <template #default="{ row }">
-            <el-select v-model="row.locationId" :disabled="busy || imported" filterable placeholder="请选择位置" style="width:100%">
-              <el-option v-for="location in locations" :key="location.id" :label="location.name" :value="location.id" />
-            </el-select>
+            <div class="selector-with-action">
+              <el-select v-model="row.locationId" :disabled="busy || imported" filterable placeholder="请选择位置" style="width:100%">
+                <el-option v-for="location in locations" :key="location.id" :label="location.name" :value="location.id" />
+                <template #empty><div class="empty-option">暂无可用位置</div></template>
+              </el-select>
+              <el-button type="primary" plain :disabled="busy || imported" @click="createLocationForLine(row)">新增</el-button>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="120" align="center">
@@ -428,6 +547,9 @@ onMounted(loadMasterData)
 .source-name { color:#909399; font-size:13px; }
 .form-grid { display:grid; grid-template-columns:repeat(2, minmax(260px, 1fr)); gap:0 20px; }
 .warning-list { margin-top:6px; line-height:1.7; }
+.selector-with-action { display:flex; gap:8px; align-items:center; width:100%; }
+.selector-with-action .el-select { min-width:0; flex:1; }
+.empty-option { padding:8px 12px; color:#909399; text-align:center; }
 .submit-row { display:flex; justify-content:space-between; gap:20px; align-items:center; flex-wrap:wrap; }
 .success-text { color:#529b2e; font-weight:600; }
 @media (max-width: 900px) { .form-grid { grid-template-columns:1fr; } }
