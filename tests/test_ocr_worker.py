@@ -157,6 +157,21 @@ class FixedTransferFormParserTest(unittest.TestCase):
         self.assertAlmostEqual(bands[0][1], 392.0, places=2)
         self.assertEqual(bands[-1], (488.0, 536.0))
 
+    def test_quantity_bounds_snap_to_nearest_physical_grid_rules(self):
+        layout, warnings = ocr.table_layout(standard_headers(), 1000, 1000)
+        self.assertIsNotNone(layout)
+        self.assertEqual(warnings, [])
+
+        left, right = ocr.snap_quantity_bounds(
+            [520.0, 566.0, 650.0, 690.0, 760.0],
+            layout,
+            page_width=1000,
+        )
+
+        self.assertEqual((left, right), (566.0, 650.0))
+        self.assertLess(left, layout.quantity_header.cx)
+        self.assertGreater(right, layout.quantity_header.cx)
+
     def test_page_quantity_recovery_prefers_issued_quantity_over_other_numbers(self):
         headers = standard_headers()
         layout, warnings = ocr.table_layout(headers, 1000, 1000)
