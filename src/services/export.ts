@@ -38,9 +38,10 @@ function setColumnWidths(sheet: XLSX.WorkSheet, widths: number[]) {
 
 export async function exportMaterialRows(rows: Material[]) {
   const data = [
-    ['物资名称', '计量单位', '分类', '默认存放位置', '备注', '状态'],
+    ['物资名称', '规格型号', '计量单位', '分类', '默认存放位置', '备注', '状态'],
     ...rows.map((row) => [
       row.name,
+      row.specification ?? '',
       row.unit_name ?? '',
       row.category ?? '',
       row.location_name ?? '',
@@ -49,7 +50,7 @@ export async function exportMaterialRows(rows: Material[]) {
     ]),
   ]
   const sheet = XLSX.utils.aoa_to_sheet(data)
-  setColumnWidths(sheet, [22, 12, 16, 20, 28, 10])
+  setColumnWidths(sheet, [22, 20, 12, 16, 20, 28, 10])
   const book = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(book, sheet, '物资明细')
   return saveWorkbook(book, `物资明细_${safeDateStamp()}.xlsx`)
