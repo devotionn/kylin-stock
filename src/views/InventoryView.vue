@@ -52,7 +52,7 @@ onMounted(refresh)
 <template>
   <el-card shadow="never">
     <div class="toolbar">
-      <el-input v-model="filters.keyword" :disabled="operationBusy" clearable placeholder="物资名称" style="width:220px" @keyup.enter="refresh" />
+      <el-input v-model="filters.keyword" :disabled="operationBusy" clearable placeholder="物资名称或规格型号" style="width:240px" @keyup.enter="refresh" />
       <el-input v-model="filters.unit" :disabled="operationBusy" clearable placeholder="计量单位" style="width:150px" @keyup.enter="refresh" />
       <el-input v-model="filters.location" :disabled="operationBusy" clearable placeholder="存放位置" style="width:180px" @keyup.enter="refresh" />
       <el-button type="primary" :loading="loading" :disabled="operationBusy" @click="refresh">查询</el-button>
@@ -63,7 +63,8 @@ onMounted(refresh)
     </div>
 
     <el-table v-loading="loading" :data="rows" border stripe empty-text="暂无库存">
-      <el-table-column prop="material_name" label="物资名称" min-width="180" />
+      <el-table-column prop="material_name" label="物资名称" min-width="160" />
+      <el-table-column prop="specification" label="规格型号" min-width="160" />
       <el-table-column prop="unit_name" label="单位" width="100" />
       <el-table-column prop="location_name" label="存放位置" min-width="160" />
       <el-table-column prop="quantity" label="当前库存" width="140" />
