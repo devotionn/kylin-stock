@@ -164,10 +164,10 @@ class FixedTransferFormParserTest(unittest.TestCase):
         self.assertEqual(warnings, [])
 
         page_tokens = headers + [
-            token("1", 30, 360, 20),            # serial
-            token("5", 490, 360, 30),           # unit price
-            token("1000", 590, 360, 70, score=0.97),  # issued quantity
-            token("999", 742, 360, 60),         # actual quantity, different column
+            token("1", 30, 360, 20),
+            token("5", 490, 360, 30),
+            token("1000", 590, 360, 70, score=0.97),
+            token("999", 742, 360, 60),
         ]
 
         quantity, score = ocr.recover_quantity_from_page_tokens(
@@ -184,7 +184,7 @@ class FixedTransferFormParserTest(unittest.TestCase):
     def test_missing_quantity_caps_complete_row_confidence(self):
         confidence = ocr.required_row_confidence(0.99, 0.98, 0.0, False)
         self.assertLessEqual(confidence, 0.65)
-        self.assertAlmostEqual(confidence, (0.99 + 0.98) / 3.0)
+        self.assertAlmostEqual(confidence, 0.65)
 
     def test_missing_quantity_column_fails_soft_for_human_review(self):
         tokens = [
