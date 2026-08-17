@@ -127,26 +127,62 @@ fn truncate_stderr(bytes: &[u8]) -> String {
     format!("{shortened}…")
 }
 
+fn stage_ascii_image_copy(image: &Path) -> Result<PathBuf, String> {
+    let extension = image
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("img")
+        .to_ascii_lowercase();
+    let staged = env::temp_dir().join(format!(
+        "kylin-stock-ocr-{}.{}",
+        uuid::Uuid::new_v4().simple(),
+        extension
+    ));
+    fs::copy(image, &staged)
+        .map_err(|e| format!("无法创建 OCR 临时图片副本：{e}"))?;
+    Ok(staged)
+}
+
+fn worker_image_path(image: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+    // RapidOCR can read Windows Unicode paths, but OpenCV's cv2.imread may
+    // silently return None for the same path. The fixed-grid parser depends on
+    // OpenCV, so on Windows always stage the bytes under an ASCII filename.
+    // The file contents are unchanged, therefore the worker's SHA-256 remains
+    // identical to the original image and duplicate-import protection is safe.
+    if cfg!(target_os = "windows") {
+        let staged = stage_ascii_image_copy(image)?;
+        Ok((staged.clone(), Some(staged)))
+    } else {
+        Ok((image.to_path_buf(), None))
+    }
+}
+
 fn run_worker(worker: PathBuf, image: PathBuf) -> Result<RecognizedTransferDocument, String> {
     let python = python_executable();
     let python_display = python.to_string_lossy();
+    let (worker_image, cleanup_path) = worker_image_path(&image)?;
 
     // stdout is a machine protocol, not console text. On Windows a redirected
     // Python stdout may otherwise inherit the local ANSI code page (for example
     // GBK), while serde_json requires UTF-8 JSON bytes. Force UTF-8 on both
     // stdout and stderr so Chinese OCR text is transported deterministically.
-    let output = Command::new(&python)
+    let output_result = Command::new(&python)
         .arg(&worker)
-        .arg(&image)
+        .arg(&worker_image)
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
-        .output()
-        .map_err(|e| {
-            format!(
-                "无法启动本地 OCR 环境（{python_display}）：{e}。请先运行 OCR 安装脚本，或设置 KYLIN_STOCK_OCR_PYTHON。"
-            )
-        })?;
+        .output();
+
+    if let Some(path) = cleanup_path.as_ref() {
+        let _ = fs::remove_file(path);
+    }
+
+    let output = output_result.map_err(|e| {
+        format!(
+            "无法启动本地 OCR 环境（{python_display}）：{e}。请先运行 OCR 安装脚本，或设置 KYLIN_STOCK_OCR_PYTHON。"
+        )
+    })?;
 
     if !output.status.success() {
         let detail = truncate_stderr(&output.stderr);
@@ -215,5 +251,23 @@ mod tests {
         let error = validate_image(&path).expect_err("non-image must fail");
         let _ = fs::remove_file(&path);
         assert!(error.contains("仅支持"));
+    }
+
+    #[test]
+    fn staged_ascii_copy_preserves_image_bytes() {
+        let source = env::temp_dir().join(format!("微信图片-{}.jpg", uuid::Uuid::new_v4()));
+        let bytes = b"fake-image-bytes-for-path-staging-test";
+        fs::write(&source, bytes).expect("write source image fixture");
+
+        let staged = stage_ascii_image_copy(&source).expect("stage image copy");
+        let staged_name = staged.file_name().and_then(|name| name.to_str()).expect("ascii staged name");
+        let copied = fs::read(&staged).expect("read staged image");
+
+        assert!(staged_name.is_ascii());
+        assert!(staged_name.starts_with("kylin-stock-ocr-"));
+        assert_eq!(copied, bytes);
+
+        let _ = fs::remove_file(source);
+        let _ = fs::remove_file(staged);
     }
 }
