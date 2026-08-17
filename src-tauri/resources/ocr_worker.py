@@ -475,6 +475,36 @@ def select_row_bands(
     return bands[:200]
 
 
+def flatten_hough_values(value) -> list[object]:
+    """Flatten OpenCV Hough output without assuming a NumPy array shape."""
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        flattened: list[object] = []
+        for item in value:
+            flattened.extend(flatten_hough_values(item))
+        return flattened
+    return [value]
+
+
+def hough_segments(lines) -> list[tuple[float, float, float, float]]:
+    """Normalize HoughLinesP outputs shaped as (N,1,4), (N,4), or (4,)."""
+    if lines is None:
+        return []
+    values = flatten_hough_values(lines)
+    if len(values) < 4 or len(values) % 4 != 0:
+        return []
+
+    segments: list[tuple[float, float, float, float]] = []
+    for index in range(0, len(values), 4):
+        try:
+            x1, y1, x2, y2 = (float(value) for value in values[index : index + 4])
+        except (TypeError, ValueError):
+            continue
+        segments.append((x1, y1, x2, y2))
+    return segments
+
+
 def detect_horizontal_table_lines(image, layout: TableLayout) -> list[float]:
     try:
         import cv2
@@ -507,8 +537,7 @@ def detect_horizontal_table_lines(image, layout: TableLayout) -> list[float]:
     right_needed = min(float(width), max(layout.spec_right, layout.qty_right) + width * 0.03)
     max_slope = 0.08
 
-    for raw in lines:
-        x1, y1, x2, y2 = [float(value) for value in raw[0]]
+    for x1, y1, x2, y2 in hough_segments(lines):
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
         if dx <= 1 or dy / dx > max_slope:
@@ -568,8 +597,7 @@ def detect_vertical_table_lines(
     search_right = min(float(width), target_center + search_half)
 
     x_values: list[float] = []
-    for raw in lines:
-        x1, y1, x2, y2 = [float(value) for value in raw[0]]
+    for x1, y1, x2, y2 in hough_segments(lines):
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
         if dy <= 1 or dx / dy > 0.12:
@@ -837,9 +865,16 @@ def extract_table_from_tokens(
 def load_image(path: Path):
     try:
         import cv2
+        import numpy as np
     except Exception:
         return None
-    return cv2.imread(str(path), cv2.IMREAD_COLOR)
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+        if data.size == 0:
+            return None
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
 
 
 def run(image_path: str) -> dict:
