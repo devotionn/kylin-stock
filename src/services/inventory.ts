@@ -4,6 +4,7 @@ import { getDatabase, withDatabaseAccess, withDatabaseMutation } from './databas
 export interface InventoryRow {
   material_id: number
   material_name: string
+  specification: string | null
   unit_name: string | null
   location_id: number
   location_name: string
@@ -16,6 +17,7 @@ export interface LedgerRow {
   transaction_no: string
   type: 'IN' | 'OUT' | 'ADJUST'
   material_name: string
+  specification: string | null
   unit_name: string | null
   location_name: string
   quantity: number
@@ -110,17 +112,17 @@ export async function listInventory(filters: InventoryFilters | string = {}): Pr
 
   return withDatabaseAccess(async () =>
     (await getDatabase()).select<InventoryRow[]>(`
-      SELECT b.material_id, m.name AS material_name, u.name AS unit_name,
+      SELECT b.material_id, m.name AS material_name, m.specification, u.name AS unit_name,
              b.location_id, l.name AS location_name, b.quantity, b.updated_at
       FROM inventory_balances b
       JOIN materials m ON m.id=b.material_id
       LEFT JOIN units u ON u.id=m.unit_id
       JOIN locations l ON l.id=b.location_id
       WHERE b.quantity <> 0
-        AND ($1='%%' OR m.name LIKE $1)
+        AND ($1='%%' OR m.name LIKE $1 OR COALESCE(m.specification,'') LIKE $1)
         AND ($2='%%' OR COALESCE(u.name,'') LIKE $2)
         AND ($3='%%' OR l.name LIKE $3)
-      ORDER BY m.name, l.name`, [keyword, unit, location]),
+      ORDER BY m.name, COALESCE(m.specification,''), l.name`, [keyword, unit, location]),
   )
 }
 
@@ -131,14 +133,14 @@ export async function listLedger(filters: LedgerFilters = {}): Promise<LedgerRow
 
   return withDatabaseAccess(async () =>
     (await getDatabase()).select<LedgerRow[]>(`
-      SELECT t.id,t.transaction_no,t.type,m.name AS material_name,u.name AS unit_name,
+      SELECT t.id,t.transaction_no,t.type,m.name AS material_name,m.specification,u.name AS unit_name,
              l.name AS location_name,t.quantity,t.occurred_at,t.related_unit,t.destination,
              t.handler,t.receiver,t.remark
       FROM stock_transactions t
       JOIN materials m ON m.id=t.material_id
       LEFT JOIN units u ON u.id=m.unit_id
       JOIN locations l ON l.id=t.location_id
-      WHERE ($1='%%' OR m.name LIKE $1)
+      WHERE ($1='%%' OR m.name LIKE $1 OR COALESCE(m.specification,'') LIKE $1)
         AND ($2='' OR t.type=$2)
         AND ($3='%%' OR COALESCE(t.related_unit,'') LIKE $3)
         AND ($4='%%' OR COALESCE(t.destination,'') LIKE $4)
