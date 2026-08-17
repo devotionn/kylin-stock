@@ -87,7 +87,7 @@ jobs:
         run: python -m pip install -r src-tauri/resources/requirements-ocr.txt
 
       - name: RapidOCR runtime self-check
-        run: python -m rapidocr check
+        run: rapidocr check
 
   arm64-package-smoke:
     runs-on: ubuntu-22.04-arm
