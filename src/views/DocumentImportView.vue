@@ -89,8 +89,13 @@ function autoMatchLine(line: DraftLine, force = false) {
   const sameName = materials.value.filter((material) => normalizeIdentity(material.name) === targetName)
   let matches: Material[] = []
   if (targetSpec) {
+    // A scanned specification is part of material identity: never degrade an
+    // exact name+spec match into a name-only guess.
     matches = sameName.filter((material) => normalizeIdentity(material.specification) === targetSpec)
-  } else if (sameName.length === 1) {
+  } else if (sameName.length === 1 && !normalizeIdentity(sameName[0].specification)) {
+    // Name-only auto-match is safe only when both the scan and the sole system
+    // material genuinely have no specification. A missing OCR spec must not
+    // silently select an otherwise specified material.
     matches = sameName
   }
 
@@ -100,7 +105,7 @@ function autoMatchLine(line: DraftLine, force = false) {
     line.locationId = material.default_location_id ?? undefined
     line.matchState = 'MATCHED'
   } else {
-    line.matchState = matches.length > 1 || (!targetSpec && sameName.length > 1) ? 'AMBIGUOUS' : 'UNMATCHED'
+    line.matchState = sameName.length > 1 ? 'AMBIGUOUS' : 'UNMATCHED'
   }
 }
 
