@@ -28,10 +28,8 @@ fi
 "$VENV_DIR/bin/rapidocr" check
 
 cat <<EOF
-OCR runtime ready.
-
-Use this runtime when starting KylinStock:
-export KYLIN_STOCK_OCR_PYTHON="$VENV_DIR/bin/python"
+OCR runtime ready: $VENV_DIR
+KylinStock will auto-discover this standard OCR environment when launched from the desktop.
 
 For fully offline deployment, prepare an ARM64 wheelhouse first and run:
 KYLIN_STOCK_OCR_WHEELHOUSE=/path/to/wheels $0
