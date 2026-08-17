@@ -30,6 +30,9 @@
     "active": true,
     "targets": "all",
     "category": "Business",
-    "shortDescription": "物资出入库与库存管理系统"
+    "shortDescription": "物资出入库与库存管理系统",
+    "resources": [
+      "resources/ocr_worker.py"
+    ]
   }
 }
