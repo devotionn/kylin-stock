@@ -93,6 +93,30 @@ class FixedTransferFormParserTest(unittest.TestCase):
         self.assertEqual(lines[0]["quantity"], 0.0)
         self.assertTrue(any("数量" in warning for warning in lines[0]["warnings"]))
 
+    def test_material_name_containing_label_word_is_not_filtered(self):
+        tokens = [
+            token("名称", 90, 300, 70),
+            token("规格型号", 250, 300, 100),
+            token("单位", 410, 300, 60),
+            token("应发数", 510, 285, 80),
+            token("数量", 550, 315, 60),
+            token("资料袋", 105, 370, 80),
+            token("A4透明", 250, 370, 90),
+            token("12", 555, 370, 50),
+            token("调拨单位", 40, 610, 90),
+        ]
+
+        self.assertTrue(ocr.is_probable_label(token("资料", 0, 0)))
+        self.assertFalse(ocr.is_probable_label(token("资料袋", 0, 0)))
+
+        lines, warnings = ocr.extract_table(tokens, 1000, 1000)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["itemName"], "资料袋")
+        self.assertEqual(lines[0]["specification"], "A4透明")
+        self.assertEqual(lines[0]["quantity"], 12.0)
+
 
 if __name__ == "__main__":
     unittest.main()
