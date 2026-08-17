@@ -32,7 +32,8 @@
     "category": "Business",
     "shortDescription": "物资出入库与库存管理系统",
     "resources": [
-      "resources/ocr_worker.py"
+      "resources/ocr_worker.py",
+      "resources/requirements-ocr.txt"
     ]
   }
 }
