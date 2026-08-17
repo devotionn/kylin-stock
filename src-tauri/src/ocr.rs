@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn parses_worker_contract() {
-        let json = br#"{
+        let json = r#"{
           "documentType":"TRANSFER_RECEIVE",
           "sourceSha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           "transferBasis":"2026年计划",
@@ -175,7 +175,7 @@ mod tests {
           "ocrEngine":"RapidOCR/ONNX Runtime",
           "recognizedTextCount":42
         }"#;
-        let result: RecognizedTransferDocument = serde_json::from_slice(json).expect("parse worker output");
+        let result: RecognizedTransferDocument = serde_json::from_str(json).expect("parse worker output");
         assert_eq!(result.document_type, "TRANSFER_RECEIVE");
         assert_eq!(result.source_sha256.len(), 64);
         assert_eq!(result.lines.len(), 1);
