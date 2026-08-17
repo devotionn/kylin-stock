@@ -3,90 +3,99 @@ use std::{fs, path::PathBuf, str::FromStr, time::Duration};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE: &str = "kylin-stock.db";
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 1;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 2;
 
 struct Migration {
     version: i64,
     statements: &'static [&'static str],
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    statements: &[
-        r#"CREATE TABLE IF NOT EXISTS units (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            status INTEGER NOT NULL DEFAULT 1
-        )"#,
-        r#"CREATE TABLE IF NOT EXISTS locations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            remark TEXT,
-            status INTEGER NOT NULL DEFAULT 1
-        )"#,
-        r#"CREATE TABLE IF NOT EXISTS materials (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            unit_id INTEGER,
-            category TEXT,
-            default_location_id INTEGER,
-            remark TEXT,
-            status INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(unit_id) REFERENCES units(id),
-            FOREIGN KEY(default_location_id) REFERENCES locations(id)
-        )"#,
-        r#"CREATE TABLE IF NOT EXISTS inventory_balances (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER NOT NULL,
-            location_id INTEGER NOT NULL,
-            quantity NUMERIC NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL,
-            UNIQUE(material_id, location_id),
-            FOREIGN KEY(material_id) REFERENCES materials(id),
-            FOREIGN KEY(location_id) REFERENCES locations(id)
-        )"#,
-        r#"CREATE TABLE IF NOT EXISTS stock_transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            transaction_no TEXT NOT NULL UNIQUE,
-            type TEXT NOT NULL CHECK(type IN ('IN', 'OUT', 'ADJUST')),
-            material_id INTEGER NOT NULL,
-            location_id INTEGER NOT NULL,
-            quantity NUMERIC NOT NULL CHECK(quantity > 0),
-            occurred_at TEXT NOT NULL,
-            related_unit TEXT,
-            destination TEXT,
-            handler TEXT,
-            receiver TEXT,
-            remark TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(material_id) REFERENCES materials(id),
-            FOREIGN KEY(location_id) REFERENCES locations(id)
-        )"#,
-        r#"CREATE TABLE IF NOT EXISTS backup_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_name TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            backup_type TEXT NOT NULL CHECK(backup_type IN ('MANUAL', 'ANNUAL')),
-            backup_year INTEGER,
-            file_size INTEGER,
-            checksum TEXT,
-            created_at TEXT NOT NULL,
-            remark TEXT
-        )"#,
-        r#"CREATE TABLE IF NOT EXISTS app_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_at TEXT NOT NULL
-        )"#,
-        "CREATE INDEX IF NOT EXISTS idx_materials_name ON materials(name)",
-        "CREATE INDEX IF NOT EXISTS idx_transactions_material ON stock_transactions(material_id)",
-        "CREATE INDEX IF NOT EXISTS idx_transactions_occurred_at ON stock_transactions(occurred_at)",
-        "CREATE INDEX IF NOT EXISTS idx_transactions_type ON stock_transactions(type)",
-        "CREATE INDEX IF NOT EXISTS idx_transactions_destination ON stock_transactions(destination)",
-    ],
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        statements: &[
+            r#"CREATE TABLE IF NOT EXISTS units (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                status INTEGER NOT NULL DEFAULT 1
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                remark TEXT,
+                status INTEGER NOT NULL DEFAULT 1
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS materials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                unit_id INTEGER,
+                category TEXT,
+                default_location_id INTEGER,
+                remark TEXT,
+                status INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(unit_id) REFERENCES units(id),
+                FOREIGN KEY(default_location_id) REFERENCES locations(id)
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS inventory_balances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                quantity NUMERIC NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(material_id, location_id),
+                FOREIGN KEY(material_id) REFERENCES materials(id),
+                FOREIGN KEY(location_id) REFERENCES locations(id)
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS stock_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_no TEXT NOT NULL UNIQUE,
+                type TEXT NOT NULL CHECK(type IN ('IN', 'OUT', 'ADJUST')),
+                material_id INTEGER NOT NULL,
+                location_id INTEGER NOT NULL,
+                quantity NUMERIC NOT NULL CHECK(quantity > 0),
+                occurred_at TEXT NOT NULL,
+                related_unit TEXT,
+                destination TEXT,
+                handler TEXT,
+                receiver TEXT,
+                remark TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(material_id) REFERENCES materials(id),
+                FOREIGN KEY(location_id) REFERENCES locations(id)
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS backup_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                backup_type TEXT NOT NULL CHECK(backup_type IN ('MANUAL', 'ANNUAL')),
+                backup_year INTEGER,
+                file_size INTEGER,
+                checksum TEXT,
+                created_at TEXT NOT NULL,
+                remark TEXT
+            )"#,
+            r#"CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT NOT NULL
+            )"#,
+            "CREATE INDEX IF NOT EXISTS idx_materials_name ON materials(name)",
+            "CREATE INDEX IF NOT EXISTS idx_transactions_material ON stock_transactions(material_id)",
+            "CREATE INDEX IF NOT EXISTS idx_transactions_occurred_at ON stock_transactions(occurred_at)",
+            "CREATE INDEX IF NOT EXISTS idx_transactions_type ON stock_transactions(type)",
+            "CREATE INDEX IF NOT EXISTS idx_transactions_destination ON stock_transactions(destination)",
+        ],
+    },
+    Migration {
+        version: 2,
+        statements: &[
+            "ALTER TABLE materials ADD COLUMN specification TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_materials_name_specification ON materials(name, specification)",
+        ],
+    },
+];
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_config = app
@@ -197,6 +206,16 @@ mod tests {
             .expect("read user_version")
     }
 
+    async fn column_exists(connection: &mut SqliteConnection, table: &str, column: &str) -> bool {
+        let query = format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name=?");
+        sqlx::query_scalar::<_, i64>(&query)
+            .bind(column)
+            .fetch_one(connection)
+            .await
+            .expect("inspect column")
+            == 1
+    }
+
     #[tokio::test]
     async fn fresh_database_is_created_at_latest_version() {
         let mut connection = memory_database().await;
@@ -206,6 +225,7 @@ mod tests {
 
         assert_eq!(version, LATEST_SCHEMA_VERSION);
         assert_eq!(user_version(&mut connection).await, LATEST_SCHEMA_VERSION);
+        assert!(column_exists(&mut connection, "materials", "specification").await);
 
         let required_tables = [
             "units",
@@ -229,16 +249,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unversioned_existing_database_keeps_business_data() {
+    async fn version_one_database_adds_specification_without_data_loss() {
         let mut connection = memory_database().await;
-        run_migrations_on_connection(&mut connection)
-            .await
-            .expect("create legacy-compatible schema");
-
-        sqlx::query("PRAGMA user_version = 0")
+        for migration in MIGRATIONS.iter().filter(|migration| migration.version == 1) {
+            for statement in migration.statements {
+                sqlx::query(statement)
+                    .execute(&mut connection)
+                    .await
+                    .expect("create version one schema");
+            }
+        }
+        sqlx::query("PRAGMA user_version = 1")
             .execute(&mut connection)
             .await
-            .expect("simulate pre-versioning database");
+            .expect("set v1 schema version");
+        sqlx::query(
+            "INSERT INTO materials(name,status,created_at,updated_at) VALUES ('网线',1,'2026-08-16','2026-08-16')",
+        )
+        .execute(&mut connection)
+        .await
+        .expect("seed v1 material");
+
+        let version = run_migrations_on_connection(&mut connection)
+            .await
+            .expect("upgrade v1 database");
+
+        assert_eq!(version, 2);
+        assert!(column_exists(&mut connection, "materials", "specification").await);
+        let row = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT name, specification FROM materials WHERE id=1",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .expect("read upgraded material");
+        assert_eq!(row.0, "网线");
+        assert_eq!(row.1, None);
+    }
+
+    #[tokio::test]
+    async fn unversioned_existing_database_keeps_business_data() {
+        let mut connection = memory_database().await;
+        sqlx::query(
+            r#"CREATE TABLE materials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                unit_id INTEGER,
+                category TEXT,
+                default_location_id INTEGER,
+                remark TEXT,
+                status INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"#,
+        )
+        .execute(&mut connection)
+        .await
+        .expect("create unversioned legacy materials");
         sqlx::query(
             "INSERT INTO materials(name,status,created_at,updated_at) VALUES ('网线',1,'2026-08-16','2026-08-16')",
         )
@@ -255,6 +321,7 @@ mod tests {
             .await
             .expect("read preserved row");
         assert_eq!(name, "网线");
+        assert!(column_exists(&mut connection, "materials", "specification").await);
         assert_eq!(user_version(&mut connection).await, LATEST_SCHEMA_VERSION);
     }
 
