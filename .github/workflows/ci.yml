@@ -44,6 +44,9 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Validate OCR worker syntax
+        run: python3 -m py_compile src-tauri/resources/ocr_worker.py
+
       - name: TypeScript and Vite build
         run: npm run build
 
