@@ -31,6 +31,14 @@ def token(text: str, x: float, y: float, width: float = 80, height: float = 20, 
     )
 
 
+def parse_tokens(tokens, width=1000, height=1000):
+    layout, warnings = ocr.table_layout(tokens, width, height)
+    if layout is None:
+        return [], warnings
+    lines, row_warnings = ocr.extract_table_from_tokens(tokens, layout, height)
+    return lines, warnings + row_warnings
+
+
 class NumpyLikeBox(list):
     """Mimic NumPy's refusal to coerce multi-value arrays to bool."""
 
@@ -59,14 +67,20 @@ class FixedTransferFormParserTest(unittest.TestCase):
             token("仓库", 150, 180, 70),
             token("接收单位", 40, 220, 90),
             token("超市", 150, 220, 70),
+            token("序号", 20, 300, 50),
             token("名称", 90, 300, 70),
             token("规格型号", 250, 300, 100),
             token("单位", 410, 300, 60),
             token("应发数", 510, 285, 80),
+            token("等级", 500, 315, 45),
             token("数量", 550, 315, 60),
+            token("等级", 650, 315, 45),
+            token("数量", 700, 315, 60),
+            token("1", 30, 370, 20),
             token("粉笔", 105, 370, 70),
             token("10.9型粉笔", 245, 370, 110),
             token("1000", 555, 370, 70),
+            token("2", 30, 420, 20),
             token("橡皮", 105, 420, 70),
             token("20型橡皮", 250, 420, 105),
             token("1000", 555, 420, 70),
@@ -80,7 +94,7 @@ class FixedTransferFormParserTest(unittest.TestCase):
         basis, _ = ocr.right_value(basis_anchor, tokens, 1000)
         supplier, _ = ocr.right_value(supplier_anchor, tokens, 1000)
         receiver, _ = ocr.right_value(receiver_anchor, tokens, 1000)
-        lines, warnings = ocr.extract_table(tokens, 1000, 1000)
+        lines, warnings = parse_tokens(tokens)
 
         self.assertEqual(basis, "2026年计划")
         self.assertEqual(supplier, "仓库")
@@ -94,6 +108,46 @@ class FixedTransferFormParserTest(unittest.TestCase):
             ],
         )
 
+    def test_serial_column_is_excluded_from_material_name(self):
+        tokens = [
+            token("序号", 20, 300, 50),
+            token("名称", 100, 300, 70),
+            token("规格型号", 270, 300, 100),
+            token("单位", 430, 300, 60),
+            token("应发数", 530, 285, 80),
+            token("等级", 520, 315, 45),
+            token("数量", 575, 315, 60),
+            token("1", 30, 370, 20),
+            token("粉笔", 110, 370, 70),
+            token("10.9型粉笔", 270, 370, 110),
+            token("1000", 580, 370, 70),
+            token("2", 30, 420, 20),
+            token("橡皮", 110, 420, 70),
+            token("20型橡皮", 270, 420, 105),
+            token("1000", 580, 420, 70),
+            token("调拨单位", 40, 610, 90),
+        ]
+
+        lines, warnings = parse_tokens(tokens)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual([line["itemName"] for line in lines], ["粉笔", "橡皮"])
+        self.assertNotIn("1", lines[0]["itemName"])
+        self.assertNotIn("2", lines[1]["itemName"])
+
+    def test_horizontal_rules_create_independent_material_bands(self):
+        bands = ocr.select_row_bands(
+            [345.0, 346.5, 392.0, 440.0, 488.0, 536.0],
+            row_start=350.0,
+            row_end=540.0,
+            page_height=1000.0,
+        )
+
+        self.assertEqual(len(bands), 4)
+        self.assertAlmostEqual(bands[0][0], 345.75, places=2)
+        self.assertAlmostEqual(bands[0][1], 392.0, places=2)
+        self.assertEqual(bands[-1], (488.0, 536.0))
+
     def test_missing_quantity_column_fails_soft_for_human_review(self):
         tokens = [
             token("名称", 90, 300, 70),
@@ -104,7 +158,7 @@ class FixedTransferFormParserTest(unittest.TestCase):
             token("调拨单位", 40, 610, 90),
         ]
 
-        lines, warnings = ocr.extract_table(tokens, 1000, 1000)
+        lines, warnings = parse_tokens(tokens)
 
         self.assertTrue(any("应发数量" in warning for warning in warnings))
         self.assertEqual(len(lines), 1)
@@ -118,6 +172,7 @@ class FixedTransferFormParserTest(unittest.TestCase):
             token("规格型号", 250, 300, 100),
             token("单位", 410, 300, 60),
             token("应发数", 510, 285, 80),
+            token("等级", 500, 315, 45),
             token("数量", 550, 315, 60),
             token("资料袋", 105, 370, 80),
             token("A4透明", 250, 370, 90),
@@ -128,7 +183,7 @@ class FixedTransferFormParserTest(unittest.TestCase):
         self.assertTrue(ocr.is_probable_label(token("资料", 0, 0)))
         self.assertFalse(ocr.is_probable_label(token("资料袋", 0, 0)))
 
-        lines, warnings = ocr.extract_table(tokens, 1000, 1000)
+        lines, warnings = parse_tokens(tokens)
 
         self.assertEqual(warnings, [])
         self.assertEqual(len(lines), 1)
