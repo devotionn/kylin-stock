@@ -31,7 +31,26 @@ def token(text: str, x: float, y: float, width: float = 80, height: float = 20, 
     )
 
 
+class NumpyLikeBox(list):
+    """Mimic NumPy's refusal to coerce multi-value arrays to bool."""
+
+    def __bool__(self):
+        raise ValueError("truth value of an array with more than one element is ambiguous")
+
+
 class FixedTransferFormParserTest(unittest.TestCase):
+    def test_token_from_accepts_numpy_like_box_without_boolean_coercion(self):
+        box = NumpyLikeBox([[10, 20], [110, 20], [110, 40], [10, 40]])
+
+        parsed = ocr.token_from(box, "粉笔", 0.98)
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.text, "粉笔")
+        self.assertEqual(parsed.left, 10.0)
+        self.assertEqual(parsed.right, 110.0)
+        self.assertEqual(parsed.top, 20.0)
+        self.assertEqual(parsed.bottom, 40.0)
+
     def test_extracts_customer_target_fields_from_geometry(self):
         tokens = [
             token("调拨依据", 560, 95, 90),
