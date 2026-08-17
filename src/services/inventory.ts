@@ -81,6 +81,20 @@ export async function stockIn(input: StockOperationInput) {
   return withDatabaseMutation(() => invoke<string>('stock_in', { input: payload }))
 }
 
+export async function batchStockIn(inputs: StockOperationInput[]) {
+  if (!inputs.length) throw new Error('批量入库至少需要一条物资明细')
+  const payloads = inputs.map((input, index) => {
+    const payload = snapshotStockInput(input)
+    try {
+      validate(payload)
+    } catch (error) {
+      throw new Error(`第 ${index + 1} 行：${error instanceof Error ? error.message : String(error)}`)
+    }
+    return payload
+  })
+  return withDatabaseMutation(() => invoke<string[]>('batch_stock_in', { inputs: payloads }))
+}
+
 export async function stockOut(input: StockOperationInput) {
   const payload = snapshotStockInput(input)
   validate(payload)
