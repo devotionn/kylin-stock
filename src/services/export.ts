@@ -58,11 +58,12 @@ export async function exportMaterialRows(rows: Material[]) {
 
 export async function exportLedgerRows(rows: LedgerRow[]) {
   const data = [
-    ['流水号', '业务类型', '物资名称', '数量', '单位', '存放位置', '相关单位', '出库去向', '经办人', '领用人', '业务时间', '备注'],
+    ['流水号', '业务类型', '物资名称', '规格型号', '数量', '单位', '存放位置', '相关单位', '出库去向', '经办人', '领用人', '业务时间', '备注'],
     ...rows.map((row) => [
       row.transaction_no,
       row.type === 'IN' ? '入库' : row.type === 'OUT' ? '出库' : '调整',
       row.material_name,
+      row.specification ?? '',
       row.quantity,
       row.unit_name ?? '',
       row.location_name,
@@ -75,7 +76,7 @@ export async function exportLedgerRows(rows: LedgerRow[]) {
     ]),
   ]
   const sheet = XLSX.utils.aoa_to_sheet(data)
-  setColumnWidths(sheet, [24, 10, 20, 12, 10, 18, 18, 20, 12, 12, 20, 24])
+  setColumnWidths(sheet, [24, 10, 20, 20, 12, 10, 18, 18, 20, 12, 12, 20, 24])
   const book = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(book, sheet, '出入库明细')
   return saveWorkbook(book, `出入库明细_${safeDateStamp()}.xlsx`)
@@ -83,9 +84,10 @@ export async function exportLedgerRows(rows: LedgerRow[]) {
 
 export async function exportInventoryRows(rows: InventoryRow[]) {
   const data = [
-    ['物资名称', '单位', '存放位置', '当前库存', '最后更新时间'],
+    ['物资名称', '规格型号', '单位', '存放位置', '当前库存', '最后更新时间'],
     ...rows.map((row) => [
       row.material_name,
+      row.specification ?? '',
       row.unit_name ?? '',
       row.location_name,
       row.quantity,
@@ -93,7 +95,7 @@ export async function exportInventoryRows(rows: InventoryRow[]) {
     ]),
   ]
   const sheet = XLSX.utils.aoa_to_sheet(data)
-  setColumnWidths(sheet, [22, 10, 20, 14, 20])
+  setColumnWidths(sheet, [22, 20, 10, 20, 14, 20])
   const book = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(book, sheet, '库存物资分布')
   return saveWorkbook(book, `库存物资分布_${safeDateStamp()}.xlsx`)
