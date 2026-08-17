@@ -39,6 +39,22 @@ def parse_tokens(tokens, width=1000, height=1000):
     return lines, warnings + row_warnings
 
 
+def standard_headers():
+    return [
+        token("序号", 20, 300, 50),
+        token("名称", 100, 300, 70),
+        token("规格型号", 270, 300, 100),
+        token("单位", 430, 300, 60),
+        token("单价", 485, 300, 50),
+        token("应发数", 545, 285, 80),
+        token("等级", 530, 315, 45),
+        token("数量", 590, 315, 60),
+        token("实发数", 690, 285, 80),
+        token("等级", 680, 315, 45),
+        token("数量", 740, 315, 60),
+    ]
+
+
 class NumpyLikeBox(list):
     """Mimic NumPy's refusal to coerce multi-value arrays to bool."""
 
@@ -109,22 +125,15 @@ class FixedTransferFormParserTest(unittest.TestCase):
         )
 
     def test_serial_column_is_excluded_from_material_name(self):
-        tokens = [
-            token("序号", 20, 300, 50),
-            token("名称", 100, 300, 70),
-            token("规格型号", 270, 300, 100),
-            token("单位", 430, 300, 60),
-            token("应发数", 530, 285, 80),
-            token("等级", 520, 315, 45),
-            token("数量", 575, 315, 60),
+        tokens = standard_headers() + [
             token("1", 30, 370, 20),
             token("粉笔", 110, 370, 70),
             token("10.9型粉笔", 270, 370, 110),
-            token("1000", 580, 370, 70),
+            token("1000", 595, 370, 70),
             token("2", 30, 420, 20),
             token("橡皮", 110, 420, 70),
             token("20型橡皮", 270, 420, 105),
-            token("1000", 580, 420, 70),
+            token("1000", 595, 420, 70),
             token("调拨单位", 40, 610, 90),
         ]
 
@@ -148,6 +157,35 @@ class FixedTransferFormParserTest(unittest.TestCase):
         self.assertAlmostEqual(bands[0][1], 392.0, places=2)
         self.assertEqual(bands[-1], (488.0, 536.0))
 
+    def test_page_quantity_recovery_prefers_issued_quantity_over_other_numbers(self):
+        headers = standard_headers()
+        layout, warnings = ocr.table_layout(headers, 1000, 1000)
+        self.assertIsNotNone(layout)
+        self.assertEqual(warnings, [])
+
+        page_tokens = headers + [
+            token("1", 30, 360, 20),            # serial
+            token("5", 490, 360, 30),           # unit price
+            token("1000", 590, 360, 70, score=0.97),  # issued quantity
+            token("999", 742, 360, 60),         # actual quantity, different column
+        ]
+
+        quantity, score = ocr.recover_quantity_from_page_tokens(
+            page_tokens,
+            layout,
+            top=345,
+            bottom=395,
+            page_width=1000,
+        )
+
+        self.assertEqual(quantity, 1000.0)
+        self.assertAlmostEqual(score, 0.97)
+
+    def test_missing_quantity_caps_complete_row_confidence(self):
+        confidence = ocr.required_row_confidence(0.99, 0.98, 0.0, False)
+        self.assertLessEqual(confidence, 0.65)
+        self.assertAlmostEqual(confidence, (0.99 + 0.98) / 3.0)
+
     def test_missing_quantity_column_fails_soft_for_human_review(self):
         tokens = [
             token("名称", 90, 300, 70),
@@ -165,6 +203,7 @@ class FixedTransferFormParserTest(unittest.TestCase):
         self.assertEqual(lines[0]["itemName"], "粉笔")
         self.assertEqual(lines[0]["quantity"], 0.0)
         self.assertTrue(any("数量" in warning for warning in lines[0]["warnings"]))
+        self.assertLessEqual(lines[0]["confidence"], 0.65)
 
     def test_material_name_containing_label_word_is_not_filtered(self):
         tokens = [
