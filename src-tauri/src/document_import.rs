@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use sqlx::{Connection, Executor, SqliteConnection};
+use sqlx::{Connection, SqliteConnection};
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
