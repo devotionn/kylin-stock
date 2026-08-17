@@ -25,7 +25,7 @@ else
   "$VENV_DIR/bin/python" -m pip install -r "$REQUIREMENTS"
 fi
 
-"$VENV_DIR/bin/python" -m rapidocr check || "$VENV_DIR/bin/rapidocr" check
+"$VENV_DIR/bin/rapidocr" check
 
 cat <<EOF
 OCR runtime ready.
