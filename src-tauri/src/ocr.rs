@@ -26,6 +26,7 @@ pub struct RecognizedLine {
 #[serde(rename_all = "camelCase")]
 pub struct RecognizedTransferDocument {
     pub document_type: String,
+    pub source_sha256: String,
     pub transfer_basis: String,
     pub supplier_unit: String,
     pub receiver_unit: String,
@@ -158,6 +159,7 @@ mod tests {
     fn parses_worker_contract() {
         let json = br#"{
           "documentType":"TRANSFER_RECEIVE",
+          "sourceSha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           "transferBasis":"2026年计划",
           "supplierUnit":"仓库",
           "receiverUnit":"超市",
@@ -175,6 +177,7 @@ mod tests {
         }"#;
         let result: RecognizedTransferDocument = serde_json::from_slice(json).expect("parse worker output");
         assert_eq!(result.document_type, "TRANSFER_RECEIVE");
+        assert_eq!(result.source_sha256.len(), 64);
         assert_eq!(result.lines.len(), 1);
         assert_eq!(result.lines[0].quantity, 1000.0);
     }
