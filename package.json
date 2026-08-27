@@ -14,7 +14,7 @@
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",
     "@tauri-apps/api": "1.6.0",
-    "tauri-plugin-sql-api": "https://github.com/tauri-apps/tauri-plugin-sql#v1",
+    "tauri-plugin-sql-api": "https://codeload.github.com/tauri-apps/tauri-plugin-sql/tar.gz/7fc861c33ee68831cc6bd2830a577f4fdb102f79",
     "dayjs": "^1.11.0",
     "element-plus": "^2.0.0",
     "vue": "^3.5.0",

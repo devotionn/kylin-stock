@@ -12,7 +12,7 @@ if [ ! -f "$deb" ]; then
   exit 2
 fi
 
-for command_name in dpkg-deb mktemp; do
+for command_name in dpkg-deb mktemp readelf; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf 'Required command not found: %s\n' "$command_name" >&2
     exit 2
@@ -57,20 +57,16 @@ if [ ! -x "$binary" ]; then
   exit 1
 fi
 
-if command -v readelf >/dev/null 2>&1; then
-  needed="$(readelf -d "$binary" 2>/dev/null | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')"
-  if ! grep -Fxq 'libwebkit2gtk-4.0.so.37' <<<"$needed"; then
-    printf 'Executable is not linked to libwebkit2gtk-4.0.so.37.\n' >&2
-    printf 'NEEDED entries:\n%s\n' "$needed" >&2
-    exit 1
-  fi
-  if grep -Fxq 'libwebkit2gtk-4.1.so.0' <<<"$needed"; then
-    printf 'Executable still links to libwebkit2gtk-4.1.so.0.\n' >&2
-    exit 1
-  fi
-  printf 'WebKitGTK SONAME=libwebkit2gtk-4.0.so.37\n'
-else
-  printf 'readelf unavailable; skipped ELF SONAME verification.\n' >&2
+needed="$(readelf -d "$binary" 2>/dev/null | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')"
+if ! grep -Fxq 'libwebkit2gtk-4.0.so.37' <<<"$needed"; then
+  printf 'Executable is not linked to libwebkit2gtk-4.0.so.37.\n' >&2
+  printf 'NEEDED entries:\n%s\n' "$needed" >&2
+  exit 1
 fi
+if grep -Fxq 'libwebkit2gtk-4.1.so.0' <<<"$needed"; then
+  printf 'Executable still links to libwebkit2gtk-4.1.so.0.\n' >&2
+  exit 1
+fi
+printf 'WebKitGTK SONAME=libwebkit2gtk-4.0.so.37\n'
 
 printf 'Kylin WebKitGTK 4.0 package contract: PASS\n'
