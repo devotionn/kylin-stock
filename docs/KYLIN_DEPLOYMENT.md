@@ -18,7 +18,13 @@
 4. 如银河麒麟系统 WebKitGTK/GTK/GLIBC 与 CI 构建环境存在 ABI 差异，应调整构建基线或在兼容环境重新构建，不直接强行升级客户核心系统库；
 5. 首次安装和最终验收都应保留可追溯证据，而不是只口头确认“能打开”。
 
-## 3. 第一次到目标机后的环境诊断
+## 3. 运行时兼容性结论
+
+客户目标机为银河麒麟 V10 JICAI（Ubuntu 20.04 基线），已确认系统提供 `libwebkit2gtk-4.0-37`，不提供 `libwebkit2gtk-4.1-0`。因此本项目固定使用 Tauri 1，并要求最终 ARM64 `.deb` 声明 `libwebkit2gtk-4.0-37`。
+
+不要通过修改 `.deb` 文本依赖、`--ignore-depends` 或替换客户核心系统库来绕过该问题；这些做法不能解决程序实际链接的 WebKitGTK ABI 不匹配。
+
+## 4. 第一次到目标机后的环境诊断
 
 在仓库根目录执行：
 
@@ -32,7 +38,7 @@ chmod +x scripts/kylin-doctor.sh
 - `uname -m` / CPU 架构；
 - 银河麒麟发行版信息；
 - GLIBC 版本；
-- WebKitGTK 4.1 / 4.0 情况；
+- WebKitGTK 4.0 情况；
 - GTK3；
 - OpenSSL；
 - 桌面会话与语言环境；
@@ -40,12 +46,12 @@ chmod +x scripts/kylin-doctor.sh
 
 诊断输出保存在项目验收记录中。
 
-## 4. CI ARM64 构建/安装烟测
+## 5. CI ARM64 构建/安装烟测
 
 GitHub Actions 使用原生 `ubuntu-22.04-arm` runner。正式门禁应覆盖：
 
 1. 确认 runner `uname -m = aarch64`；
-2. 安装 Tauri Linux 构建依赖；
+2. 安装 Tauri 1 / WebKitGTK 4.0 Linux 构建依赖；
 3. 安装前端依赖；
 4. 原生执行 Tauri ARM64 `.deb` 构建；
 5. 验证 Debian `Package` / `Version` / `Architecture` 元数据；
@@ -61,7 +67,7 @@ Linux 系统包身份使用 ASCII 名称 `kylin-stock`；用户界面/桌面入�
 
 **该 CI 产物仍不是默认的客户正式交付包。** 银河麒麟 V10 目标机可能具有不同的 GLIBC、WebKitGTK、GTK 和系统库版本，最终包必须通过目标机实测。
 
-## 5. 真机验收证据采集
+## 6. 真机验收证据采集
 
 正式候选包安装后执行：
 
@@ -85,7 +91,7 @@ chmod +x scripts/kylin-acceptance-evidence.sh
 
 `docs/ACCEPTANCE_CHECKLIST.md`
 
-## 6. 真机业务验收
+## 7. 真机业务验收
 
 正式候选包至少覆盖以下类别：
 
@@ -103,13 +109,13 @@ chmod +x scripts/kylin-acceptance-evidence.sh
 
 现场结果必须记录在 `docs/ACCEPTANCE_CHECKLIST.md` 的副本中，并归档关键截图、导出样例、备份样例和 evidence 输出。
 
-## 7. 数据目录
+## 8. 数据目录
 
 Tauri SQL 的相对 SQLite 数据库 `sqlite:kylin-stock.db` 位于应用 `app_config_dir` 下。KylinStock 的原生库存事务、数据库 migration 与备份/恢复模块必须定位同一业务数据库。
 
 现场不得根据猜测手工移动或修改数据库。需要迁移数据时优先使用系统提供的“备份与恢复”功能。
 
-## 8. 数据安全验收
+## 9. 数据安全验收
 
 ### 入库事务
 
@@ -133,7 +139,7 @@ Tauri SQL 的相对 SQLite 数据库 `sqlite:kylin-stock.db` 位于应用 `app_c
 
 恢复失败时应优先回退到恢复前安全副本。
 
-## 9. 发布候选包与归档
+## 10. 发布候选包与归档
 
 正式交付时建议归档一个固定目录：
 
@@ -151,7 +157,7 @@ KylinStock-Release-0.1.0/
 
 CI 生成的测试构建和客户正式候选包应明确区分，避免把未完成目标机验证的 smoke artifact 误当成最终交付件。
 
-## 10. 最终发布门槛
+## 11. 最终发布门槛
 
 只有同时满足以下条件，才标记为客户正式 Release：
 

@@ -1,7 +1,10 @@
 {
-  "productName": "kylin-stock",
-  "bundle": {
-    "linux": {
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "package": {
+    "productName": "kylin-stock"
+  },
+  "tauri": {
+    "bundle": {
       "deb": {
         "desktopTemplate": "deb.desktop.hbs"
       }

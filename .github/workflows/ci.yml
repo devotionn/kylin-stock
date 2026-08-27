@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.0-dev \
             build-essential \
             curl \
             wget \
@@ -127,7 +127,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.0-dev \
             build-essential \
             curl \
             wget \
@@ -166,6 +166,13 @@ jobs:
           test "$PACKAGE" = "kylin-stock"
           test "$ARCH" = "arm64"
           test -n "$VERSION"
+
+      - name: Verify Kylin WebKitGTK 4.0 package contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          bash scripts/verify-kylin-deb.sh "$DEB"
 
       - name: Install generated ARM64 deb
         shell: bash
