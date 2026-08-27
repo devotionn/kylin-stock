@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
 const MAX_WORKER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -73,9 +73,9 @@ fn find_worker(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let resource_dir = app
-        .path()
+        .path_resolver()
         .resource_dir()
-        .map_err(|e| format!("无法定位应用资源目录：{e}"))?;
+        .ok_or_else(|| "无法定位应用资源目录：未知路径".to_string())?;
     let candidates = [
         resource_dir.join("resources").join("ocr_worker.py"),
         resource_dir.join("ocr_worker.py"),

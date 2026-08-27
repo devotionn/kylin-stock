@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core'
-import Database from '@tauri-apps/plugin-sql'
+import { invoke } from '@tauri-apps/api/tauri'
+import Database from 'tauri-plugin-sql-api'
 
 let database: Database | null = null
 let initialization: Promise<Database> | null = null

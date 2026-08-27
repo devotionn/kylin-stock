@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open } from '@tauri-apps/api/dialog'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createLocation,
