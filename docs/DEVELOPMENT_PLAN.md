@@ -14,7 +14,7 @@ Status: **implemented; CI compile validation passed**.
 Completed:
 
 - Vue 3 + TypeScript + Vite project skeleton.
-- Tauri 2 desktop shell.
+- Tauri 1 desktop shell（适配银河麒麟 V10 的 WebKitGTK 4.0）。
 - Project directory conventions.
 - Element Plus application shell/sidebar/topbar.
 - SQLite initialization layer and initial schema.

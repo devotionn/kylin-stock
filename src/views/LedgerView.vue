@@ -37,7 +37,6 @@ function reset() {
 }
 
 async function exportCurrent() {
-  // Never export the previous rows while a new query is still resolving.
   if (operationBusy.value) return
   if (!rows.value.length) return ElMessage.warning('当前没有可导出的查询结果')
 
@@ -59,7 +58,7 @@ onMounted(refresh)
 <template>
   <el-card shadow="never">
     <div class="toolbar">
-      <el-input v-model="filters.material" :disabled="operationBusy" clearable placeholder="物资名称" style="width:180px" />
+      <el-input v-model="filters.material" :disabled="operationBusy" clearable placeholder="物资名称或规格" style="width:200px" />
       <el-date-picker
         v-model="dateRange"
         :disabled="operationBusy"
@@ -101,7 +100,8 @@ onMounted(refresh)
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="material_name" label="物资名称" min-width="160" />
+      <el-table-column prop="material_name" label="物资名称" min-width="150" />
+      <el-table-column prop="specification" label="规格型号" min-width="150" />
       <el-table-column prop="quantity" label="数量" width="110" />
       <el-table-column prop="unit_name" label="计量单位" width="100" />
       <el-table-column prop="location_name" label="存放位置" min-width="130" />

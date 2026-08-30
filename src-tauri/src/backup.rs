@@ -1,13 +1,13 @@
 use serde::Serialize;
 use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Read,
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::migration::LATEST_SCHEMA_VERSION;
 
@@ -36,15 +36,21 @@ fn timestamp_millis() -> u128 {
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_config = app
-        .path()
+        .path_resolver()
         .app_config_dir()
-        .map_err(|e| format!("无法获取应用数据目录：{e}"))?;
+        .ok_or_else(|| "无法获取应用数据目录：未知路径".to_string())?;
     fs::create_dir_all(&app_config).map_err(|e| format!("无法创建应用数据目录：{e}"))?;
     Ok(app_config.join(DATABASE_FILE))
 }
 
 fn sync_file(path: &Path) -> Result<(), String> {
-    File::open(path)
+    // Windows rejects `sync_all` on a read-only handle. Every caller owns or
+    // has just created the file, so request write access while retaining the
+    // read handle needed by Unix implementations.
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
         .and_then(|file| file.sync_all())
         .map_err(|e| format!("无法将文件同步到磁盘：{e}"))
 }

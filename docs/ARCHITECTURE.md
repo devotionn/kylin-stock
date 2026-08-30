@@ -12,7 +12,7 @@ Recommended stack:
 - Vue 3 + TypeScript
 - Vite
 - Element Plus
-- Tauri 2
+- Tauri 1（Linux 使用 WebKitGTK 4.0）
 - Rust
 - SQLite
 - Tauri SQL / Rust SQLite integration
@@ -78,7 +78,7 @@ SQLite database backup is treated as a first-class feature. Support:
 
 ## 7. Deployment
 
-Primary target is an ARM64 package for Kylin V10. Final packaging format will be selected after validation on the customer's real machine. Candidate formats include `.deb` and other Tauri-supported Linux bundles.
+Primary target is an ARM64 `.deb` package for Kylin V10. Tauri 1 is used because the customer's Ubuntu 20.04-based Kylin image provides WebKitGTK 4.0, while Tauri 2 requires WebKitGTK 4.1. The package must still be validated on the customer's real machine before release.
 
 The delivered UX is:
 

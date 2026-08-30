@@ -1,10 +1,11 @@
 use serde::Deserialize;
-use sqlx::{Connection, Executor, SqliteConnection};
+use sqlx::{Connection, SqliteConnection};
 use std::{fs, path::PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 const DATABASE_FILE: &str = "kylin-stock.db";
+const MAX_BATCH_ITEMS: usize = 200;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,9 +23,9 @@ pub struct StockOperationInput {
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_config = app
-        .path()
+        .path_resolver()
         .app_config_dir()
-        .map_err(|e| format!("无法获取应用数据目录：{e}"))?;
+        .ok_or_else(|| "无法获取应用数据目录：未知路径".to_string())?;
     fs::create_dir_all(&app_config).map_err(|e| format!("无法创建应用数据目录：{e}"))?;
     Ok(app_config.join(DATABASE_FILE))
 }
@@ -68,6 +69,19 @@ fn validate(input: &StockOperationInput) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_batch(inputs: &[StockOperationInput]) -> Result<(), String> {
+    if inputs.is_empty() {
+        return Err("批量入库至少需要一条物资明细".into());
+    }
+    if inputs.len() > MAX_BATCH_ITEMS {
+        return Err(format!("单张单据最多允许 {MAX_BATCH_ITEMS} 条物资明细"));
+    }
+    for (index, input) in inputs.iter().enumerate() {
+        validate(input).map_err(|error| format!("第 {} 行：{error}", index + 1))?;
+    }
+    Ok(())
+}
+
 fn clean(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -100,6 +114,46 @@ async fn commit(connection: &mut SqliteConnection) -> Result<(), String> {
         .map_err(|e| format!("库存事务提交失败：{e}"))
 }
 
+async fn insert_stock_in(
+    connection: &mut SqliteConnection,
+    input: &StockOperationInput,
+    transaction_no: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        r#"INSERT INTO stock_transactions
+          (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
+          VALUES (?,'IN',?,?,?,?,?,NULL,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))"#,
+    )
+    .bind(transaction_no)
+    .bind(input.material_id)
+    .bind(input.location_id)
+    .bind(input.quantity)
+    .bind(input.occurred_at.trim())
+    .bind(clean(&input.related_unit))
+    .bind(clean(&input.handler))
+    .bind(clean(&input.receiver))
+    .bind(clean(&input.remark))
+    .execute(&mut *connection)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        r#"INSERT INTO inventory_balances(material_id,location_id,quantity,updated_at)
+           VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+           ON CONFLICT(material_id,location_id) DO UPDATE SET
+           quantity = quantity + excluded.quantity,
+           updated_at = excluded.updated_at"#,
+    )
+    .bind(input.material_id)
+    .bind(input.location_id)
+    .bind(input.quantity)
+    .execute(&mut *connection)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 async fn stock_in_on_connection(
     connection: &mut SqliteConnection,
     input: &StockOperationInput,
@@ -107,45 +161,8 @@ async fn stock_in_on_connection(
     validate(input)?;
     begin_immediate(connection).await?;
 
-    let transaction_no = transaction_no("IN");
-    let result: Result<(), String> = async {
-        sqlx::query(
-            r#"INSERT INTO stock_transactions
-              (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
-              VALUES (?,'IN',?,?,?,?,?,NULL,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))"#,
-        )
-        .bind(&transaction_no)
-        .bind(input.material_id)
-        .bind(input.location_id)
-        .bind(input.quantity)
-        .bind(input.occurred_at.trim())
-        .bind(clean(&input.related_unit))
-        .bind(clean(&input.handler))
-        .bind(clean(&input.receiver))
-        .bind(clean(&input.remark))
-        .execute(&mut *connection)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        sqlx::query(
-            r#"INSERT INTO inventory_balances(material_id,location_id,quantity,updated_at)
-               VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-               ON CONFLICT(material_id,location_id) DO UPDATE SET
-               quantity = quantity + excluded.quantity,
-               updated_at = excluded.updated_at"#,
-        )
-        .bind(input.material_id)
-        .bind(input.location_id)
-        .bind(input.quantity)
-        .execute(&mut *connection)
-        .await
-        .map_err(|e| e.to_string())?;
-
-        Ok(())
-    }
-    .await;
-
-    if let Err(error) = result {
+    let number = transaction_no("IN");
+    if let Err(error) = insert_stock_in(connection, input, &number).await {
         rollback(connection).await;
         return Err(format!("入库登记失败：{error}"));
     }
@@ -154,7 +171,31 @@ async fn stock_in_on_connection(
         return Err(error);
     }
 
-    Ok(transaction_no)
+    Ok(number)
+}
+
+async fn batch_stock_in_on_connection(
+    connection: &mut SqliteConnection,
+    inputs: &[StockOperationInput],
+) -> Result<Vec<String>, String> {
+    validate_batch(inputs)?;
+    begin_immediate(connection).await?;
+
+    let mut numbers = Vec::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        let number = transaction_no("IN");
+        if let Err(error) = insert_stock_in(connection, input, &number).await {
+            rollback(connection).await;
+            return Err(format!("批量入库第 {} 行失败，整张单据已回滚：{error}", index + 1));
+        }
+        numbers.push(number);
+    }
+
+    if let Err(error) = commit(connection).await {
+        rollback(connection).await;
+        return Err(error);
+    }
+    Ok(numbers)
 }
 
 async fn stock_out_on_connection(
@@ -165,8 +206,6 @@ async fn stock_out_on_connection(
     let destination = clean(&input.destination).ok_or_else(|| "出库去向不能为空".to_string())?;
     begin_immediate(connection).await?;
 
-    // SQLite NUMERIC affinity may physically store whole values as INTEGER even
-    // when they were bound from f64. Cast explicitly so SQLx always decodes REAL.
     let available = match sqlx::query_scalar::<_, f64>(
         "SELECT CAST(quantity AS REAL) FROM inventory_balances WHERE material_id=? AND location_id=?",
     )
@@ -187,14 +226,14 @@ async fn stock_out_on_connection(
         return Err(format!("库存不足，当前可用库存为 {available}"));
     }
 
-    let transaction_no = transaction_no("OUT");
+    let number = transaction_no("OUT");
     let result: Result<(), String> = async {
         sqlx::query(
             r#"INSERT INTO stock_transactions
               (transaction_no,type,material_id,location_id,quantity,occurred_at,related_unit,destination,handler,receiver,remark,created_at)
               VALUES (?,'OUT',?,?,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))"#,
         )
-        .bind(&transaction_no)
+        .bind(&number)
         .bind(input.material_id)
         .bind(input.location_id)
         .bind(input.quantity)
@@ -238,13 +277,22 @@ async fn stock_out_on_connection(
         return Err(error);
     }
 
-    Ok(transaction_no)
+    Ok(number)
 }
 
 #[tauri::command]
 pub async fn stock_in(app: AppHandle, input: StockOperationInput) -> Result<String, String> {
     let mut connection = open_connection(&app).await?;
     stock_in_on_connection(&mut connection, &input).await
+}
+
+#[tauri::command]
+pub async fn batch_stock_in(
+    app: AppHandle,
+    inputs: Vec<StockOperationInput>,
+) -> Result<Vec<String>, String> {
+    let mut connection = open_connection(&app).await?;
+    batch_stock_in_on_connection(&mut connection, &inputs).await
 }
 
 #[tauri::command]
@@ -345,6 +393,30 @@ mod tests {
         assert!(tx.starts_with("IN-"));
         assert_eq!(balance(&mut connection).await, 10.0);
         assert_eq!(transaction_count(&mut connection, "IN").await, 1);
+    }
+
+    #[tokio::test]
+    async fn batch_stock_in_commits_all_rows_together() {
+        let mut connection = test_connection().await;
+        let numbers = batch_stock_in_on_connection(&mut connection, &[input(2.0), input(3.0)])
+            .await
+            .expect("batch stock in succeeds");
+
+        assert_eq!(numbers.len(), 2);
+        assert_eq!(balance(&mut connection).await, 5.0);
+        assert_eq!(transaction_count(&mut connection, "IN").await, 2);
+    }
+
+    #[tokio::test]
+    async fn invalid_batch_row_leaves_ledger_and_balance_unchanged() {
+        let mut connection = test_connection().await;
+        let error = batch_stock_in_on_connection(&mut connection, &[input(2.0), input(-1.0)])
+            .await
+            .expect_err("invalid batch must fail");
+
+        assert!(error.contains("第 2 行"));
+        assert_eq!(balance(&mut connection).await, 0.0);
+        assert_eq!(transaction_count(&mut connection, "IN").await, 0);
     }
 
     #[tokio::test]

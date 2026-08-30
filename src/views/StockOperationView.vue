@@ -26,6 +26,12 @@ async function load() {
   }
 }
 
+function materialLabel(item: Material) {
+  const specification = item.specification ? ` / ${item.specification}` : ''
+  const unit = item.unit_name ? `（${item.unit_name}）` : ''
+  return `${item.name}${specification}${unit}`
+}
+
 function onMaterialChange(id: number) {
   const material = materials.value.find((item) => item.id === id)
   if (material?.default_location_id) form.locationId = material.default_location_id
@@ -37,8 +43,6 @@ function reset() {
 }
 
 async function submit() {
-  // Loading state alone is not a correctness guard: two click events can enter
-  // this function before Vue has rendered the disabled/loading button state.
   if (submitting.value) return
   if (!form.materialId) return ElMessage.warning('请选择物资')
   if (!form.locationId) return ElMessage.warning('请选择存放位置')
@@ -67,9 +71,9 @@ onMounted(load)
     <template #header><strong>{{ isOut ? '出库登记' : '入库登记' }}</strong></template>
     <el-alert v-if="!materials.length && !loading" title="还没有可用物资，请先到“物资管理”新增并启用物资。" type="warning" :closable="false" show-icon style="margin-bottom:18px" />
     <el-form label-width="110px" style="max-width: 720px" :disabled="submitting">
-      <el-form-item label="物资名称" required>
-        <el-select v-model="form.materialId" filterable style="width:100%" placeholder="请选择物资" @change="onMaterialChange">
-          <el-option v-for="item in materials" :key="item.id" :label="`${item.name}${item.unit_name ? `（${item.unit_name}）` : ''}`" :value="item.id" />
+      <el-form-item label="物资/规格" required>
+        <el-select v-model="form.materialId" filterable style="width:100%" placeholder="请选择物资及规格" @change="onMaterialChange">
+          <el-option v-for="item in materials" :key="item.id" :label="materialLabel(item)" :value="item.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="存放位置" required><el-select v-model="form.locationId" style="width:100%"><el-option v-for="item in locations" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>

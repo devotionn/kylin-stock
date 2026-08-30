@@ -21,6 +21,7 @@ const menu = [
   { path: '/', label: '库存总览', icon: HomeFilled },
   { path: '/materials', label: '物资管理', icon: Goods },
   { path: '/stock-in', label: '入库登记', icon: Download },
+  { path: '/document-import', label: '扫描单据导入', icon: Document },
   { path: '/stock-out', label: '出库登记', icon: UploadFilled },
   { path: '/inventory', label: '当前库存', icon: Box },
   { path: '/distribution', label: '物资分布', icon: Position },

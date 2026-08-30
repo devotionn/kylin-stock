@@ -14,7 +14,7 @@ const units = ref<Unit[]>([])
 const locations = ref<Location[]>([])
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增物资')
-const form = reactive({ id: undefined as number | undefined, name: '', unitId: undefined as number | undefined, category: '', locationId: undefined as number | undefined, remark: '' })
+const form = reactive({ id: undefined as number | undefined, name: '', specification: '', unitId: undefined as number | undefined, category: '', locationId: undefined as number | undefined, remark: '' })
 
 async function loadData(query: string) {
   ;[materials.value, units.value, locations.value] = await Promise.all([listMaterials(query), listUnits(), listLocations()])
@@ -41,21 +41,19 @@ function resetSearch() {
 
 function openCreate() {
   if (operationBusy.value) return
-  Object.assign(form, { id: undefined, name: '', unitId: undefined, category: '', locationId: undefined, remark: '' })
+  Object.assign(form, { id: undefined, name: '', specification: '', unitId: undefined, category: '', locationId: undefined, remark: '' })
   dialogTitle.value = '新增物资'
   dialogVisible.value = true
 }
 
 function openEdit(row: Material) {
   if (operationBusy.value) return
-  Object.assign(form, { id: row.id, name: row.name, unitId: row.unit_id ?? undefined, category: row.category ?? '', locationId: row.default_location_id ?? undefined, remark: row.remark ?? '' })
+  Object.assign(form, { id: row.id, name: row.name, specification: row.specification ?? '', unitId: row.unit_id ?? undefined, category: row.category ?? '', locationId: row.default_location_id ?? undefined, remark: row.remark ?? '' })
   dialogTitle.value = '编辑物资'
   dialogVisible.value = true
 }
 
 async function submit() {
-  // Prevent two Save events from both passing the duplicate-name precheck and
-  // inserting the same material before the UI has rendered a loading state.
   if (mutating.value) return
   mutating.value = true
   try {
@@ -75,7 +73,8 @@ async function toggle(row: Material) {
   mutating.value = true
   try {
     const next = row.status === 1 ? 0 : 1
-    await ElMessageBox.confirm(`确认${next ? '启用' : '停用'}“${row.name}”？`, '操作确认')
+    const label = row.specification ? `${row.name}（${row.specification}）` : row.name
+    await ElMessageBox.confirm(`确认${next ? '启用' : '停用'}“${label}”？`, '操作确认')
     await setMaterialStatus(row.id, next as 0 | 1)
     ElMessage.success('操作成功')
     await loadData(keyword.value)
@@ -139,7 +138,7 @@ onMounted(refresh)
   <el-card shadow="never">
     <div class="toolbar">
       <div class="search-group">
-        <el-input v-model="keyword" :disabled="operationBusy" clearable placeholder="搜索物资名称或分类" style="width: 280px" @keyup.enter="refresh" />
+        <el-input v-model="keyword" :disabled="operationBusy" clearable placeholder="搜索物资名称、规格型号或分类" style="width: 320px" @keyup.enter="refresh" />
         <el-button type="primary" :loading="loading" :disabled="operationBusy" @click="refresh">查询</el-button>
         <el-button :disabled="operationBusy" @click="resetSearch">重置</el-button>
         <el-button type="success" :loading="exporting" :disabled="operationBusy || !materials.length" @click="exportCurrent">导出当前结果（{{ materials.length }}）</el-button>
@@ -152,7 +151,8 @@ onMounted(refresh)
     </div>
 
     <el-table v-loading="loading" :data="materials" border stripe empty-text="暂无物资，请先新增">
-      <el-table-column prop="name" label="物资名称" min-width="180" />
+      <el-table-column prop="name" label="物资名称" min-width="160" />
+      <el-table-column prop="specification" label="规格型号" min-width="160" />
       <el-table-column prop="unit_name" label="单位" width="100" />
       <el-table-column prop="category" label="分类" min-width="130" />
       <el-table-column prop="location_name" label="默认存放位置" min-width="160" />
@@ -165,6 +165,7 @@ onMounted(refresh)
   <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px" :close-on-click-modal="!mutating" :close-on-press-escape="!mutating" :show-close="!mutating">
     <el-form label-width="110px" :disabled="mutating">
       <el-form-item label="物资名称" required><el-input v-model="form.name" maxlength="100" /></el-form-item>
+      <el-form-item label="规格型号"><el-input v-model="form.specification" maxlength="100" placeholder="例如：10.9型粉笔、20型橡皮" /></el-form-item>
       <el-form-item label="计量单位"><el-select v-model="form.unitId" clearable style="width:100%"><el-option v-for="item in units" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
       <el-form-item label="物资分类"><el-input v-model="form.category" /></el-form-item>
       <el-form-item label="存放位置"><el-select v-model="form.locationId" clearable style="width:100%"><el-option v-for="item in locations" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>

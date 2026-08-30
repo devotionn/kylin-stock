@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches:
+      - main
+      - agent/scanned-document-import
 
 permissions:
   contents: read
@@ -31,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.0-dev \
             build-essential \
             curl \
             wget \
@@ -44,11 +47,62 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Validate OCR worker syntax
+        run: python3 -m py_compile src-tauri/resources/ocr_worker.py
+
+      - name: Run OCR geometry parser regression
+        run: python3 tests/test_ocr_worker.py
+
       - name: TypeScript and Vite build
         run: npm run build
 
       - name: Rust compile check with locked dependencies
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
+  arm64-ocr-runtime-smoke:
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11 ARM64
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          architecture: arm64
+          cache: pip
+          cache-dependency-path: src-tauri/resources/requirements-ocr.txt
+
+      - name: Confirm native Python architecture
+        run: |
+          python - <<'PY'
+          import platform
+          import sys
+          machine = platform.machine().lower()
+          print(sys.version)
+          print(machine)
+          assert machine in {'aarch64', 'arm64'}, machine
+          PY
+
+      - name: Install locked OCR runtime
+        run: python -m pip install -r src-tauri/resources/requirements-ocr.txt
+
+      - name: RapidOCR runtime self-check
+        run: rapidocr check
+
+      - name: RapidOCR ndarray cell-input smoke
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from rapidocr import RapidOCR
+
+          image = np.full((96, 320, 3), 255, dtype=np.uint8)
+          result = RapidOCR()(image)
+          assert hasattr(result, 'txts'), type(result)
+          print('RapidOCR accepted NumPy cell image input')
+          PY
 
   arm64-package-smoke:
     runs-on: ubuntu-22.04-arm
@@ -76,7 +130,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.0-dev \
             build-essential \
             curl \
             wget \
@@ -115,6 +169,13 @@ jobs:
           test "$PACKAGE" = "kylin-stock"
           test "$ARCH" = "arm64"
           test -n "$VERSION"
+
+      - name: Verify Kylin WebKitGTK 4.0 package contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          bash scripts/verify-kylin-deb.sh "$DEB"
 
       - name: Install generated ARM64 deb
         shell: bash
